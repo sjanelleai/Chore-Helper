@@ -1,0 +1,373 @@
+Chore Helper — Phase 2 Technical Document (Developer Handoff)
+
+Business Overview
+
+Purpose: Turn chores + good behavior into a simple, motivating game loop for kids (6–8) while keeping parents in full control.
+Core outcomes:
+	•	Kids: clear “missions,” visible progress, rewards feel earned (multi-day).
+	•	Parents: pre-approve rewards, optionally convert points to allowance, and receive an end-of-day email summary.
+	•	System: minimal friction, reliable daily reporting, simple to administer.
+
+⸻
+
+1) Phase 2 Feature Set
+
+1.1 Reward Economy Upgrade
+
+Goal: Big rewards should take 3–5 days of solid effort.
+
+Changes
+	•	Increase store reward costs materially.
+	•	Add ~30+ rewards categorized (Experiences, Privileges, Food Treats, Creativity, Family/Connection, Skills/Sports, Toys/Items, Surprise, Allowance).
+	•	Add parent pre-approval requirement: kids can only redeem rewards that parents have enabled.
+
+1.2 Allowance Option (Parent-Controlled)
+
+Goal: Allow points → optional cash-out, but only if parents explicitly enable and agree.
+
+Changes
+	•	Add setting: allowanceEnabled boolean.
+	•	Add setting: pointsPerDollar (default recommended 300).
+	•	Allowance rewards (e.g., $1, $5, $10) appear only if enabled AND approved.
+
+1.3 Bonus Points (Behavior + Initiative)
+
+Goal: Parents can award points for:
+	•	good behavior,
+	•	doing things without being asked,
+	•	kindness / teamwork / initiative.
+
+Changes
+	•	Add “Parent Bonus” action (Settings/Parent panel):
+	•	Choose reason (dropdown) and points amount.
+	•	Optional note.
+	•	Adds points + logs event (for summaries + auditability).
+
+1.4 Daily Parent Email Summary (Automated)
+
+Goal: Automatically email parents a daily summary at a configurable time.
+
+Summary includes
+	•	Completed chores
+	•	Missed chores
+	•	Points earned today (chores + bonuses – redemptions)
+	•	Bonuses awarded (reason + points)
+	•	Purchases (redemptions)
+	•	Current total points
+
+⸻
+
+2) System Architecture
+
+2.1 Client (Replit Web App)
+	•	Single-page web app (HTML/CSS/JS or React if you prefer)
+	•	Local UI state + event log
+	•	Sends daily rollup (or events) to backend for email automation
+
+2.2 Backend (Required for automated email)
+
+Recommended stack
+	•	Node.js + Express
+	•	Database: SQLite (fast start) or Postgres (preferred if scaling)
+	•	Email provider: SendGrid (or Mailgun/SES)
+
+2.3 Scheduler
+	•	Daily cron job runs at parent’s preferred time (per account), or global default (e.g., 7:30pm local).
+	•	Cron options:
+	•	GitHub Actions scheduled workflow (simple)
+	•	Render/Cyclic/Fly.io cron
+	•	Cloud scheduler (GCP/AWS) if you want “real” infra
+
+⸻
+
+3) Data Model
+
+3.1 Core Entities
+
+User
+	•	id (uuid)
+	•	parent_email
+	•	timezone (default America/Denver)
+	•	daily_summary_time (HH:MM, default 19:30)
+	•	allowance_enabled (bool)
+	•	points_per_dollar (int, default 300)
+	•	created_at, updated_at
+
+StoreItem (catalog)
+	•	id (string)
+	•	name
+	•	category
+	•	cost_points
+	•	active (bool)
+
+Approval (parent controls redemption)
+	•	user_id
+	•	item_id
+	•	approved (bool)
+
+LedgerEvent (recommended: source of truth)
+
+A ledger prevents “mystery points” and makes summaries accurate.
+	•	id (uuid)
+	•	user_id
+	•	type enum:
+	•	CHORE_COMPLETE
+	•	CHORE_UNCHECK
+	•	BONUS_AWARD
+	•	REWARD_REDEEM
+	•	ref_id (choreId or storeItemId or bonusReason)
+	•	points_delta (int; + or -)
+	•	note (nullable)
+	•	occurred_at (timestamp)
+
+DailySummary (optional cache)
+	•	user_id
+	•	date (YYYY-MM-DD)
+	•	payload_json
+	•	sent_at (nullable)
+	•	status (PENDING|SENT|FAILED)
+	•	error (nullable)
+
+⸻
+
+4) API Contract (Client → Backend)
+
+4.1 Authentication (Phase 2 minimum)
+
+To keep it simple for “home use,” you can do:
+	•	A single “family secret code” stored in app settings + backend env var, or
+	•	a one-time setup link token emailed to parent.
+
+Better approach: simple JWT auth after parent signs in with magic link (Phase 3).
+Phase 2 acceptable: X-APP-KEY header.
+
+4.2 Endpoints
+
+POST /api/events/batch
+
+Client sends event batches (recommended).
+Body
+
+{
+  "userId": "uuid",
+  "events": [
+    {"type":"CHORE_COMPLETE","refId":"make_bed","pointsDelta":10,"occurredAt":"2026-02-17T18:22:00Z"},
+    {"type":"BONUS_AWARD","refId":"initiative","pointsDelta":50,"note":"Put shoes away without asking","occurredAt":"2026-02-17T20:01:00Z"}
+  ]
+}
+
+Response
+
+{"ok": true}
+
+POST /api/parent/bonus
+
+Optional convenience endpoint instead of event batch.
+
+{
+  "userId":"uuid",
+  "reason":"initiative",
+  "points":50,
+  "note":"Did chores without being asked"
+}
+
+GET /api/summary/daily?userId=...&date=YYYY-MM-DD
+
+Returns computed daily summary (debug / parent view).
+
+⸻
+
+5) Email Summary Logic
+
+5.1 Compute Summary
+
+Given a user + date in their timezone:
+	•	pull ledger events between startOfDay and endOfDay
+	•	calculate:
+	•	completed chores = chores with final state “completed” (net completion)
+	•	missed chores = chores not completed (from chore catalog)
+	•	bonuses list = BONUS_AWARD events (reason + points + note)
+	•	points earned = sum(points_delta for the day)
+	•	purchases/redeems = REWARD_REDEEM events (item names + costs)
+	•	current total points = sum(points_delta for all time) OR store current balance in User and update transactionally.
+
+5.2 Email Template (Plain Text)
+
+Subject: Chore Helper Summary — Tue, Feb 17, 2026
+
+Body:
+	•	Completed chores
+	•	Missed chores
+	•	Bonuses
+	•	Redemptions
+	•	Points earned today
+	•	Current balance
+
+⸻
+
+6) Reward Catalog + Economy Guidelines
+
+6.1 Target Pacing
+
+Aim average daily earning (typical day) around 200–300 points:
+	•	so “Arcade trip” at 900 points = ~3–5 days depending on consistency + bonus.
+
+6.2 Categories (example)
+	•	Experiences: 700–1200+
+	•	Privileges: 400–1800
+	•	Food Treats: 300–800
+	•	Creativity: 450–900
+	•	Family/Connection: 500–800
+	•	Skills/Sports: 450–650
+	•	Toys/Items: 800–2500+
+	•	Surprise: 900–2200+
+	•	Allowance: computed (pointsPerDollar * dollars)
+
+6.3 Parent Pre-Approval Rules
+	•	Default all rewards = not approved
+	•	Parent must opt-in per item
+	•	Allowance rewards only visible if allowance_enabled=true AND approved
+
+⸻
+
+7) Bonus System (Behavior + Initiative)
+
+7.1 Bonus Reasons (configurable)
+	•	initiative (did it without being asked)
+	•	kindness (helped sibling/family)
+	•	teamwork (great attitude)
+	•	honesty
+	•	calm_response
+	•	extra_effort
+
+7.2 Bonus Constraints (recommended)
+
+To keep integrity:
+	•	Suggested bonus range: 10–150
+	•	Optional daily cap (e.g., 300) to avoid runaway inflation
+	•	Bonus requires parent action only (kid can’t self-award)
+
+7.3 UI (Parent Panel)
+	•	dropdown reason
+	•	points input
+	•	note input
+	•	“Award bonus” button
+
+⸻
+
+8) Backend Reference Implementation (Node + Express + SQLite)
+
+8.1 server.js (minimal)
+
+import express from "express";
+import Database from "better-sqlite3";
+import cors from "cors";
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const APP_KEY = process.env.APP_KEY; // simple phase-2 auth
+function auth(req, res, next) {
+  if (!APP_KEY) return next();
+  if (req.header("X-APP-KEY") !== APP_KEY) return res.status(401).json({ ok:false, error:"unauthorized" });
+  next();
+}
+
+const db = new Database("chorehelper.db");
+
+// --- schema (run once in real life via migrations) ---
+db.exec(`
+CREATE TABLE IF NOT EXISTS ledger_events (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  ref_id TEXT NOT NULL,
+  points_delta INTEGER NOT NULL,
+  note TEXT,
+  occurred_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_user_time ON ledger_events(user_id, occurred_at);
+`);
+
+// Batch insert events
+app.post("/api/events/batch", auth, (req, res) => {
+  const { userId, events } = req.body || {};
+  if (!userId || !Array.isArray(events)) return res.status(400).json({ ok:false, error:"bad_request" });
+
+  const stmt = db.prepare(`
+    INSERT INTO ledger_events (id, user_id, type, ref_id, points_delta, note, occurred_at)
+    VALUES (@id, @user_id, @type, @ref_id, @points_delta, @note, @occurred_at)
+  `);
+
+  const tx = db.transaction((items) => {
+    for (const e of items) {
+      stmt.run({
+        id: crypto.randomUUID(),
+        user_id: userId,
+        type: e.type,
+        ref_id: e.refId,
+        points_delta: Number(e.pointsDelta) || 0,
+        note: e.note || null,
+        occurred_at: e.occurredAt || new Date().toISOString()
+      });
+    }
+  });
+
+  tx(events);
+  res.json({ ok: true });
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Server running");
+});
+
+8.2 Daily Cron Job (pseudo)
+
+Run once per day per timezone/setting.
+
+// cron.js (run on schedule)
+import { sendEmail } from "./sendgrid.js";
+import { computeDailySummary } from "./summary.js";
+
+for (const user of usersDueNow()) {
+  const summary = computeDailySummary(user.id, todayInUserTZ(user.timezone));
+  await sendEmail(user.parent_email, summary.subject, summary.body);
+  markSent(user.id, summary.date);
+}
+
+
+⸻
+
+9) Client Changes Needed (High Level)
+	1.	Replace “localStorage-only” for email automation with:
+	•	local event log still ok, but must POST events to backend as they happen (or once daily).
+	2.	Add Parent Bonus UI:
+	•	calls /api/events/batch with BONUS_AWARD event (or /api/parent/bonus).
+	3.	Ensure reward redemption creates REWARD_REDEEM event.
+	4.	Ensure chore toggle creates CHORE_COMPLETE / CHORE_UNCHECK.
+
+Best practice: Send events immediately (fast + reliable), also queue offline and retry.
+
+⸻
+
+10) Acceptance Criteria
+
+Phase 2 is done when:
+	•	Rewards are categorized, expensive, and require parent approval
+	•	Allowance mode exists (points-per-dollar configurable) and requires approval
+	•	Parent can award bonus points with reason + note
+	•	Automated daily email arrives at configured time with:
+	•	completed vs missed chores
+	•	bonus log
+	•	redemptions
+	•	points earned today
+	•	current total points
+	•	System is auditable via ledger events
+
+⸻
+
+Quick question (not blocking)
+
+Do you want the daily email to reflect “completed at least once today” or “final state at end-of-day”?
+If you don’t answer: I recommend final state at end-of-day (prevents checking then unchecking from counting).
