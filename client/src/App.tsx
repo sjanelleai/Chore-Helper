@@ -8,6 +8,7 @@ import Home from "@/pages/Home";
 import Chores from "@/pages/Chores";
 import Rewards from "@/pages/Rewards";
 import Badges from "@/pages/Badges";
+import ParentPanel from "@/pages/ParentPanel";
 
 function Router() {
   return (
@@ -16,6 +17,7 @@ function Router() {
       <Route path="/chores" component={Chores} />
       <Route path="/rewards" component={Rewards} />
       <Route path="/badges" component={Badges} />
+      <Route path="/parent" component={ParentPanel} />
       <Route component={NotFound} />
     </Switch>
   );
