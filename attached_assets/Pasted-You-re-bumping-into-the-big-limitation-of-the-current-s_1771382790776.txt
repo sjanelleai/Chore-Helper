@@ -1,0 +1,490 @@
+You’re bumping into the big limitation of the current structure: state.chores is already “selected chores”, not a catalog. So there’s nothing for parents to “opt into,” and there’s no clean way to set points per chore/reward except editing code.
+
+Phase 2 should split the world into:
+	1.	Catalogs (master lists, categorized)
+	2.	Parent config (which items are enabled + what they’re worth)
+	3.	Kid runtime (today’s checklist state + points ledger)
+
+Below is a developer-ready plan + paste-ready code for the data model + core functions, and (optionally) the UI surfaces you’ll need.
+
+⸻
+
+Phase 2: Configurable Chore + Reward Catalogs (Developer Handoff)
+
+Goals
+	•	Parents can:
+	•	browse chore categories and toggle chores on/off
+	•	set points per chore (or accept defaults)
+	•	browse reward categories and toggle rewards on/off
+	•	set cost per reward (or accept defaults)
+	•	enable allowance + configure points-per-dollar
+	•	award bonus points (reason + amount + note)
+	•	Kids can:
+	•	see only the enabled chores and rewards
+	•	earn points by completing chores
+	•	redeem only enabled rewards (and optionally parent-approved)
+
+⸻
+
+1) Data Model (Replace your chores + store approach)
+
+Key idea
+	•	catalog.chores and catalog.rewards are the master lists (categorized).
+	•	config.enabledChores and config.enabledRewards decide what’s active.
+	•	config.pointsByChoreId and config.costByRewardId store overrides.
+	•	runtime.dailyStatus tracks which chores are checked today.
+
+⸻
+
+2) Paste-ready code: New State + Catalogs + Helpers
+
+Replace your DEFAULT_STATE with this version (you can keep other parts like modal/toast rendering and wire them to the new getters below).
+
+const STORAGE_KEY = "choreHelperState_v3";
+
+/** ==========
+ *  CATALOGS (MASTER LISTS)
+ *  ========== */
+const CATALOG = {
+  chores: [
+    {
+      categoryId: "room",
+      categoryName: "Room",
+      items: [
+        { id: "make_bed", name: "Make bed", defaultPoints: 15 },
+        { id: "hamper", name: "Put clothes in hamper", defaultPoints: 15 },
+        { id: "pick_up_floor", name: "Pick up floor", defaultPoints: 20 },
+        { id: "desk_tidy", name: "Tidy desk", defaultPoints: 20 },
+        { id: "clean_room_quick", name: "Clean room (quick)", defaultPoints: 35 },
+        { id: "clean_room_deep", name: "Clean room (deep)", defaultPoints: 120 }
+      ]
+    },
+    {
+      categoryId: "kitchen",
+      categoryName: "Kitchen",
+      items: [
+        { id: "clear_plate", name: "Clear your plate", defaultPoints: 15 },
+        { id: "load_dishwasher", name: "Load dishwasher", defaultPoints: 30 },
+        { id: "unload_dishwasher", name: "Unload dishwasher", defaultPoints: 40 },
+        { id: "wipe_counters", name: "Wipe counters", defaultPoints: 35 },
+        { id: "set_table", name: "Set the table", defaultPoints: 20 }
+      ]
+    },
+    {
+      categoryId: "pets",
+      categoryName: "Pets",
+      items: [
+        { id: "feed_pet", name: "Feed pet", defaultPoints: 20 },
+        { id: "water_pet", name: "Water bowl", defaultPoints: 15 },
+        { id: "pet_cleanup", name: "Help with pet cleanup", defaultPoints: 40 }
+      ]
+    },
+    {
+      categoryId: "school",
+      categoryName: "School",
+      items: [
+        { id: "homework_15", name: "Homework (15 min)", defaultPoints: 25 },
+        { id: "homework_30", name: "Homework (30 min)", defaultPoints: 50 },
+        { id: "reading_15", name: "Reading (15 min)", defaultPoints: 25 },
+        { id: "pack_bag", name: "Pack backpack", defaultPoints: 20 }
+      ]
+    },
+    {
+      categoryId: "family",
+      categoryName: "Family",
+      items: [
+        { id: "help_sibling", name: "Help sibling (kindly)", defaultPoints: 25 },
+        { id: "trash_small", name: "Take out small trash", defaultPoints: 25 },
+        { id: "laundry_helper", name: "Laundry helper", defaultPoints: 40 }
+      ]
+    }
+  ],
+
+  rewards: [
+    {
+      categoryId: "privileges",
+      categoryName: "Privileges",
+      items: [
+        { id: "priv_music_car", name: "Pick music in the car", defaultCost: 700 },
+        { id: "priv_game_choice", name: "Pick a family game", defaultCost: 650 },
+        { id: "priv_screen_15", name: "Extra screen time +15 min", defaultCost: 1200 },
+        { id: "priv_screen_30", name: "Extra screen time +30 min", defaultCost: 2000 },
+        { id: "priv_stay_up_15", name: "Stay up +15 min", defaultCost: 1400 },
+        { id: "priv_stay_up_30", name: "Stay up +30 min", defaultCost: 2400 },
+        { id: "priv_stay_up_60", name: "Stay up +60 min (VERY expensive)", defaultCost: 4500 }
+      ]
+    },
+    {
+      categoryId: "experiences",
+      categoryName: "Experiences",
+      items: [
+        { id: "exp_ice_cream", name: "Ice cream outing", defaultCost: 2200 },
+        { id: "exp_movie_night", name: "Movie night (pick the movie)", defaultCost: 2600 },
+        { id: "exp_arcade", name: "Arcade trip", defaultCost: 3500 },   // ~3–5 days
+        { id: "exp_bowling", name: "Bowling night", defaultCost: 4200 },
+        { id: "exp_playdate", name: "Friend playdate", defaultCost: 3000 }
+      ]
+    },
+    {
+      categoryId: "food",
+      categoryName: "Food Treats",
+      items: [
+        { id: "food_dessert", name: "Special dessert", defaultCost: 1200 },
+        { id: "food_smoothie", name: "Smoothie / fancy drink", defaultCost: 1500 },
+        { id: "food_pick_dinner", name: "Pick dinner (within rules)", defaultCost: 3200 }
+      ]
+    },
+    {
+      categoryId: "toys",
+      categoryName: "Toys / Items",
+      items: [
+        { id: "toy_small", name: "Small toy / trinket", defaultCost: 3000 },
+        { id: "toy_book", name: "New book", defaultCost: 4200 },
+        { id: "toy_big", name: "Bigger toy (rare)", defaultCost: 9000 }
+      ]
+    },
+    {
+      categoryId: "allowance",
+      categoryName: "Allowance",
+      items: [
+        { id: "allow_1", name: "Allowance cash-out: $1", defaultCost: 0 },
+        { id: "allow_5", name: "Allowance cash-out: $5", defaultCost: 0 },
+        { id: "allow_10", name: "Allowance cash-out: $10", defaultCost: 0 }
+      ]
+    }
+  ],
+
+  bonusReasons: [
+    { id: "initiative", name: "Did it without being asked" },
+    { id: "kindness", name: "Kindness / helped someone" },
+    { id: "attitude", name: "Great attitude" },
+    { id: "honesty", name: "Honesty / owned a mistake" },
+    { id: "extra_effort", name: "Extra effort" }
+  ]
+};
+
+/** ==========
+ *  DEFAULT STATE (CONFIG + RUNTIME)
+ *  ========== */
+const DEFAULT_STATE = {
+  points: 0,
+
+  // Parent configuration
+  config: {
+    parentEmail: "",
+    allowanceEnabled: false,
+    pointsPerDollar: 600, // make allowance harder by default
+
+    // which chores/rewards are active
+    enabledChores: {},  // choreId -> boolean
+    enabledRewards: {}, // rewardId -> boolean (or "approved")
+
+    // per-item overrides (parents can edit)
+    pointsByChoreId: {}, // choreId -> number
+    costByRewardId: {}   // rewardId -> number
+  },
+
+  // Runtime state for today
+  runtime: {
+    dailyStatus: {
+      dateKey: localDateKey(new Date()),
+      completedChores: {} // choreId -> boolean
+    }
+  },
+
+  purchases: [], // { rewardId, name, cost, ts }
+  events: []     // ledger: { type, id, pointsDelta, ts, meta? }
+};
+
+let state = loadState();
+
+/** ==========
+ *  MIGRATION + STATE LOAD
+ *  ========== */
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      const s = structuredClone(DEFAULT_STATE);
+      seedDefaults(s);
+      return s;
+    }
+    const parsed = JSON.parse(raw);
+    const merged = structuredClone(DEFAULT_STATE);
+
+    merged.points = clampNumber(parsed.points, 0, 999999);
+
+    merged.config = { ...merged.config, ...(parsed.config || {}) };
+    merged.runtime = { ...merged.runtime, ...(parsed.runtime || {}) };
+    merged.purchases = Array.isArray(parsed.purchases) ? parsed.purchases : [];
+    merged.events = Array.isArray(parsed.events) ? parsed.events : [];
+
+    // Ensure runtime date resets daily
+    ensureTodayRuntime(merged);
+
+    // Make sure enabled toggles exist
+    seedDefaults(merged);
+
+    return merged;
+  } catch (e) {
+    const s = structuredClone(DEFAULT_STATE);
+    seedDefaults(s);
+    return s;
+  }
+}
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function seedDefaults(s) {
+  // Default: enable a small starter set of chores so the app isn't empty
+  const starterChores = ["make_bed", "hamper", "pick_up_floor", "homework_15", "pack_bag", "feed_pet"];
+  const starterRewards = ["exp_movie_night", "exp_arcade", "priv_stay_up_15", "food_dessert", "priv_music_car"];
+
+  const allChores = flattenCatalog(CATALOG.chores);
+  const allRewards = flattenCatalog(CATALOG.rewards);
+
+  allChores.forEach(c => {
+    if (typeof s.config.enabledChores[c.id] !== "boolean") {
+      s.config.enabledChores[c.id] = starterChores.includes(c.id);
+    }
+    if (s.config.pointsByChoreId[c.id] == null) {
+      s.config.pointsByChoreId[c.id] = c.defaultPoints;
+    }
+  });
+
+  allRewards.forEach(r => {
+    // Hide allowance rewards unless allowance enabled
+    const isAllowance = r.id.startsWith("allow_");
+    if (typeof s.config.enabledRewards[r.id] !== "boolean") {
+      s.config.enabledRewards[r.id] = starterRewards.includes(r.id) && !isAllowance;
+    }
+    if (s.config.costByRewardId[r.id] == null) {
+      s.config.costByRewardId[r.id] = r.defaultCost;
+    }
+  });
+
+  // Apply allowance cost dynamic pricing
+  applyAllowanceCosts(s);
+
+  // If allowance disabled, force allowance rewards off
+  if (!s.config.allowanceEnabled) {
+    Object.keys(s.config.enabledRewards).forEach(id => {
+      if (id.startsWith("allow_")) s.config.enabledRewards[id] = false;
+    });
+  }
+}
+
+function ensureTodayRuntime(s) {
+  const today = localDateKey(new Date());
+  if (!s.runtime?.dailyStatus || s.runtime.dailyStatus.dateKey !== today) {
+    s.runtime = s.runtime || {};
+    s.runtime.dailyStatus = { dateKey: today, completedChores: {} };
+  }
+}
+
+function applyAllowanceCosts(s) {
+  const ppd = clampNumber(s.config.pointsPerDollar, 50, 5000);
+  s.config.pointsPerDollar = ppd;
+
+  s.config.costByRewardId["allow_1"] = ppd * 1;
+  s.config.costByRewardId["allow_5"] = ppd * 5;
+  s.config.costByRewardId["allow_10"] = ppd * 10;
+}
+
+function flattenCatalog(catArray) {
+  const out = [];
+  catArray.forEach(group => group.items.forEach(item => out.push(item)));
+  return out;
+}
+
+function clampNumber(n, min, max) {
+  const x = Number(n);
+  if (Number.isNaN(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+function localDateKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+
+⸻
+
+3) The “Robust + Configurable” Behavior (what your dev should implement)
+
+3.1 What kids see: enabled chores + enabled rewards
+
+Instead of state.chores, you render from catalog + config:
+
+Get enabled chores (with configured points)
+
+function getEnabledChores() {
+  ensureTodayRuntime(state);
+  const all = flattenCatalog(CATALOG.chores);
+  return all
+    .filter(c => state.config.enabledChores[c.id])
+    .map(c => ({
+      id: c.id,
+      name: c.name,
+      points: clampNumber(state.config.pointsByChoreId[c.id] ?? c.defaultPoints, 0, 999999),
+      completed: Boolean(state.runtime.dailyStatus.completedChores[c.id])
+    }));
+}
+
+Get enabled rewards (with configured costs)
+
+function getEnabledRewards() {
+  const all = flattenCatalog(CATALOG.rewards);
+
+  return all
+    .filter(r => {
+      if (r.id.startsWith("allow_") && !state.config.allowanceEnabled) return false;
+      return state.config.enabledRewards[r.id];
+    })
+    .map(r => ({
+      id: r.id,
+      name: r.name,
+      category: findCategoryName(CATALOG.rewards, r.id),
+      cost: clampNumber(state.config.costByRewardId[r.id] ?? r.defaultCost, 0, 999999)
+    }));
+}
+
+function findCategoryName(groups, itemId) {
+  for (const g of groups) {
+    if (g.items.some(i => i.id === itemId)) return g.categoryName;
+  }
+  return "Other";
+}
+
+3.2 Toggle chore completion (now stored in runtime.dailyStatus)
+
+function toggleChore(choreId) {
+  ensureTodayRuntime(state);
+  const enabled = state.config.enabledChores[choreId];
+  if (!enabled) return;
+
+  const current = Boolean(state.runtime.dailyStatus.completedChores[choreId]);
+  const newVal = !current;
+  state.runtime.dailyStatus.completedChores[choreId] = newVal;
+
+  const pts = clampNumber(state.config.pointsByChoreId[choreId] ?? 0, 0, 999999);
+  const delta = newVal ? +pts : -pts;
+
+  state.points = Math.max(0, state.points + delta);
+  addEvent(newVal ? "chore_completed" : "chore_unchecked", choreId, delta);
+
+  saveState();
+  render(); // your existing render()
+}
+
+3.3 Redeem reward
+
+function redeemReward(rewardId) {
+  const enabled = state.config.enabledRewards[rewardId];
+  if (!enabled) return;
+
+  if (rewardId.startsWith("allow_") && !state.config.allowanceEnabled) return;
+
+  const reward = flattenCatalog(CATALOG.rewards).find(r => r.id === rewardId);
+  if (!reward) return;
+
+  const cost = clampNumber(state.config.costByRewardId[rewardId] ?? reward.defaultCost, 0, 999999);
+  if (state.points < cost) return;
+
+  state.points -= cost;
+
+  state.purchases.push({
+    rewardId,
+    name: reward.name,
+    cost,
+    ts: Date.now()
+  });
+
+  addEvent("purchase", rewardId, -cost);
+
+  saveState();
+  render();
+}
+
+
+⸻
+
+4) Parent Config UI (what was missing before)
+
+Your current “Approved Rewards” list works, but it only toggles approval—not configurability.
+
+Phase 2 parent screens should have two admin lists:
+
+4.1 Chore Catalog Admin
+
+For each category:
+	•	checkbox: enable chore
+	•	input: points for chore (defaults pre-filled)
+
+4.2 Reward Catalog Admin
+
+For each category:
+	•	checkbox: enable reward
+	•	input: cost for reward (defaults pre-filled)
+
+This fixes your “not populated” issue because you’re rendering from CATALOG, not from “already selected chores.”
+
+⸻
+
+5) Bonus System (parents award points)
+
+Add a parent-only form:
+	•	Reason dropdown (initiative/kindness/etc)
+	•	Points input (suggest 25–200)
+	•	Note input
+	•	Award button
+
+Paste-ready function:
+
+function awardBonus({ reasonId, points, note }) {
+  const p = clampNumber(points, 0, 5000);
+  if (p <= 0) return;
+
+  state.points += p;
+
+  addEvent("bonus_award", reasonId, +p, { note: String(note || "") });
+
+  saveState();
+  render();
+}
+
+function addEvent(type, id, pointsDelta, meta) {
+  state.events.push({ type, id, pointsDelta, ts: Date.now(), meta: meta || null });
+  if (state.events.length > 600) state.events = state.events.slice(-600);
+}
+
+Then your email summary can include bonus awards by filtering type === "bonus_award" and printing reason + note.
+
+⸻
+
+6) Why the categories “didn’t populate”
+
+Two common causes:
+	1.	You were rendering from a list that wasn’t enabled/approved (so the UI looked empty).
+	2.	You didn’t have a catalog concept—only a selected list—so “categories” weren’t real.
+
+This redesign makes categories real, and gives parents a proper “choose your universe” admin panel.
+
+⸻
+
+What I’d have your developer do next (fastest path)
+	1.	Add the new CATALOG + state.config model (above).
+	2.	Update existing render functions to call:
+	•	getEnabledChores() for checklist
+	•	getEnabledRewards() for store
+	3.	Build two parent admin panels:
+	•	“Chores” and “Rewards”
+	•	Each item: enable toggle + points/cost input
+	4.	Add Parent Bonus form using awardBonus().
+
+If you paste your current index.html (the settings view + checklist/store sections), I’ll give you the exact HTML blocks + minimal JS wiring so the admin panels work on day 1.

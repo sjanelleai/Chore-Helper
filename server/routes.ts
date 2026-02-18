@@ -1,33 +1,28 @@
-
 import type { Express } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
+import { CATALOG, flattenCatalog, localDateKey } from "@shared/catalog";
 import { z } from "zod";
 import { sendDailySummaryEmail, type DailySummaryData } from "./email";
 
 async function computeDailySummary(date?: string): Promise<DailySummaryData> {
-  const today = date || new Date().toISOString().slice(0, 10);
+  const today = date || localDateKey(new Date());
   const events = await storage.getLedgerEventsForDate(today);
-  const allChores = await storage.getChores();
+  const enabledChores = await storage.getEnabledChores();
   const state = await storage.getUserState();
 
-  const choreCompletedToday = new Set(
-    events
-      .filter(e => e.type === "CHORE_COMPLETE")
-      .map(e => e.refId)
+  const completedSet = new Set(
+    events.filter(e => e.type === "chore_completed").map(e => e.refId)
   );
-  const choreUncheckedToday = new Set(
-    events
-      .filter(e => e.type === "CHORE_UNCHECK")
-      .map(e => e.refId)
+  const uncheckedSet = new Set(
+    events.filter(e => e.type === "chore_unchecked").map(e => e.refId)
   );
+
   const completedChores: string[] = [];
   const missedChores: string[] = [];
-  allChores.forEach(c => {
-    if (choreCompletedToday.has(c.name) && !choreUncheckedToday.has(c.name)) {
-      completedChores.push(c.name);
-    } else if (c.completed) {
+  enabledChores.forEach(c => {
+    if (c.completed) {
       completedChores.push(c.name);
     } else {
       missedChores.push(c.name);
@@ -35,11 +30,11 @@ async function computeDailySummary(date?: string): Promise<DailySummaryData> {
   });
 
   const bonuses = events
-    .filter(e => e.type === "BONUS_AWARD")
+    .filter(e => e.type === "bonus_award")
     .map(e => ({ reason: e.refId, points: e.pointsDelta, note: e.note }));
 
   const redemptions = events
-    .filter(e => e.type === "REWARD_REDEEM")
+    .filter(e => e.type === "purchase")
     .map(e => ({ name: e.refId, cost: Math.abs(e.pointsDelta) }));
 
   const pointsEarnedToday = events.reduce((sum, e) => sum + e.pointsDelta, 0);
@@ -55,68 +50,45 @@ async function computeDailySummary(date?: string): Promise<DailySummaryData> {
   };
 }
 
-export async function registerRoutes(
-  httpServer: Server,
-  app: Express
-): Promise<Server> {
-
+export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   await storage.seedData();
 
-  // Chores
+  // Chores (enabled only)
   app.get(api.chores.list.path, async (_req, res) => {
-    const chores = await storage.getChores();
+    const chores = await storage.getEnabledChores();
     res.json(chores);
   });
 
   app.post(api.chores.toggle.path, async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) return res.status(400).json({ message: "Invalid ID" });
-      const result = await storage.toggleChore(id);
-      const userState = await storage.getUserState();
-      const newBadges = await storage.checkAndAwardBadges(userState.totalEarnedLifetime);
-      res.json({ chore: result.chore, userState, newBadges });
-    } catch (e) {
-      res.status(404).json({ message: (e as Error).message });
+      const choreId = req.params.choreId;
+      const result = await storage.toggleChore(choreId);
+      const newBadges = await storage.checkAndAwardBadges(result.userState.totalEarnedLifetime);
+      res.json({ chore: result.chore, userState: result.userState, newBadges });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
     }
   });
 
   app.post(api.chores.reset.path, async (_req, res) => {
-    await storage.resetChores();
+    await storage.resetDaily();
     res.json({ message: "Chores reset for tomorrow!" });
   });
 
-  // Rewards
+  // Rewards (enabled only)
   app.get(api.rewards.list.path, async (_req, res) => {
-    const rewards = await storage.getRewards();
+    const rewards = await storage.getEnabledRewards();
     res.json(rewards);
   });
 
-  app.post(api.rewards.buy.path, async (req, res) => {
+  app.post(api.rewards.redeem.path, async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) return res.status(400).json({ message: "Invalid ID" });
-      const result = await storage.buyReward(id);
+      const rewardId = req.params.rewardId;
+      const result = await storage.redeemReward(rewardId);
       res.json(result);
     } catch (e: any) {
-      if (e.message === "Not enough points" || e.message.includes("approval") || e.message.includes("Allowance")) {
+      if (e.message === "Not enough points" || e.message.includes("not enabled") || e.message.includes("Allowance")) {
         res.status(400).json({ message: e.message });
-      } else {
-        res.status(404).json({ message: e.message });
-      }
-    }
-  });
-
-  app.post(api.rewards.toggleApproval.path, async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) return res.status(400).json({ message: "Invalid ID" });
-      const { approved } = api.rewards.toggleApproval.input.parse(req.body);
-      const reward = await storage.toggleRewardApproval(id, approved);
-      res.json(reward);
-    } catch (e: any) {
-      if (e instanceof z.ZodError) {
-        res.status(400).json({ message: e.errors[0].message });
       } else {
         res.status(404).json({ message: e.message });
       }
@@ -125,11 +97,11 @@ export async function registerRoutes(
 
   // Badges
   app.get(api.badges.list.path, async (_req, res) => {
-    const badges = await storage.getBadges();
-    res.json(badges);
+    const b = await storage.getBadges();
+    res.json(b);
   });
 
-  // User State
+  // User
   app.get(api.user.get.path, async (_req, res) => {
     const state = await storage.getUserState();
     res.json(state);
@@ -149,10 +121,42 @@ export async function registerRoutes(
     }
   });
 
-  // Purchases
   app.get(api.user.purchases.path, async (_req, res) => {
-    const purchases = await storage.getPurchases();
-    res.json(purchases);
+    const p = await storage.getPurchases();
+    res.json(p);
+  });
+
+  // Config (parent admin)
+  app.get(api.config.get.path, async (_req, res) => {
+    const state = await storage.getUserState();
+    res.json({
+      enabledChores: state.enabledChores,
+      enabledRewards: state.enabledRewards,
+      pointsByChoreId: state.pointsByChoreId,
+      costByRewardId: state.costByRewardId,
+      allowanceEnabled: state.allowanceEnabled,
+      pointsPerDollar: state.pointsPerDollar,
+    });
+  });
+
+  app.put(api.config.updateChores.path, async (req, res) => {
+    try {
+      const input = api.config.updateChores.input.parse(req.body);
+      const state = await storage.updateChoreConfig(input.enabledChores, input.pointsByChoreId);
+      res.json(state);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.put(api.config.updateRewards.path, async (req, res) => {
+    try {
+      const input = api.config.updateRewards.input.parse(req.body);
+      const state = await storage.updateRewardConfig(input.enabledRewards, input.costByRewardId);
+      res.json(state);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
   });
 
   // Bonus
@@ -163,11 +167,7 @@ export async function registerRoutes(
       const newBadges = await storage.checkAndAwardBadges(result.userState.totalEarnedLifetime);
       res.json({ ...result, newBadges });
     } catch (e: any) {
-      if (e instanceof z.ZodError) {
-        res.status(400).json({ message: e.errors[0].message });
-      } else {
-        res.status(400).json({ message: e.message });
-      }
+      res.status(400).json({ message: e.message });
     }
   });
 

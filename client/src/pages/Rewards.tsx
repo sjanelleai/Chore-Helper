@@ -1,26 +1,22 @@
 import { useState } from "react";
-import { useRewards, useUserState, useBuyReward } from "@/hooks/use-data";
+import { useRewards, useUserState, useRedeemReward } from "@/hooks/use-data";
 import { RewardCard } from "@/components/RewardCard";
 import { Navigation } from "@/components/Navigation";
 import { Header } from "@/components/Header";
-import { motion } from "framer-motion";
-import { ShoppingBag, Sparkles } from "lucide-react";
-import { REWARD_CATEGORIES } from "@shared/schema";
+import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function Rewards() {
   const { data: rewards, isLoading } = useRewards();
   const { data: user } = useUserState();
-  const buyMutation = useBuyReward();
+  const redeemMutation = useRedeemReward();
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
 
-  const approvedRewards = rewards?.filter(r => r.approved) || [];
+  const categories = rewards ? [...new Set(rewards.map(r => r.category))] : [];
 
   const filteredRewards = selectedCategory === "all"
-    ? approvedRewards
-    : approvedRewards.filter(r => r.category === selectedCategory);
-
-  const availableCategories = [...new Set(approvedRewards.map(r => r.category))];
+    ? rewards
+    : rewards?.filter(r => r.category === selectedCategory);
 
   return (
     <div className="min-h-screen bg-background pb-24">
@@ -45,7 +41,7 @@ export default function Rewards() {
           >
             All
           </button>
-          {availableCategories.map(cat => (
+          {categories.map(cat => (
             <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
@@ -68,13 +64,13 @@ export default function Rewards() {
               <div key={i} className="h-48 bg-muted/20 animate-pulse rounded-2xl" />
             ))}
           </div>
-        ) : filteredRewards.length === 0 ? (
+        ) : !filteredRewards || filteredRewards.length === 0 ? (
           <div className="text-center py-12">
             <div className="w-24 h-24 bg-muted rounded-full mx-auto flex items-center justify-center mb-4">
               <Sparkles className="w-10 h-10 text-muted-foreground" />
             </div>
             <h3 className="font-display font-bold text-xl text-foreground">No rewards available</h3>
-            <p className="text-muted-foreground text-sm mt-1">Ask a parent to approve some rewards!</p>
+            <p className="text-muted-foreground text-sm mt-1">Ask a parent to enable some rewards!</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-4">
@@ -83,8 +79,8 @@ export default function Rewards() {
                 key={reward.id}
                 reward={reward}
                 userPoints={user?.totalPoints || 0}
-                onBuy={(id) => buyMutation.mutate(id)}
-                isPending={buyMutation.isPending && buyMutation.variables === reward.id}
+                onRedeem={(id) => redeemMutation.mutate(id)}
+                isPending={redeemMutation.isPending && redeemMutation.variables === reward.id}
               />
             ))}
           </div>

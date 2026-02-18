@@ -4,7 +4,6 @@ import { PointsDisplay } from "@/components/PointsDisplay";
 import { Navigation } from "@/components/Navigation";
 import { motion } from "framer-motion";
 import { CheckSquare, ShoppingBag, RotateCcw, Shield } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 export default function Home() {
   const { data: user } = useUserState();

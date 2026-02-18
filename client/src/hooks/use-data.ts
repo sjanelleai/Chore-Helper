@@ -1,12 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 import { useToast } from "@/hooks/use-toast";
-import type { Chore, Badge, Reward, Purchase, UserState, LedgerEvent } from "@shared/schema";
+import type { Badge, Purchase, UserState, LedgerEvent, EnabledChore, EnabledReward } from "@shared/schema";
 
 // --- Chores ---
 
 export function useChores() {
-  return useQuery<Chore[]>({
+  return useQuery<EnabledChore[]>({
     queryKey: [api.chores.list.path],
     queryFn: async () => {
       const res = await fetch(api.chores.list.path);
@@ -21,8 +21,8 @@ export function useToggleChore() {
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async (id: number) => {
-      const url = buildUrl(api.chores.toggle.path, { id });
+    mutationFn: async (choreId: string) => {
+      const url = buildUrl(api.chores.toggle.path, { choreId });
       const res = await fetch(url, { method: "POST" });
       if (!res.ok) throw new Error("Failed to toggle chore");
       return res.json();
@@ -73,10 +73,10 @@ export function useResetChores() {
   });
 }
 
-// --- Rewards & Purchases ---
+// --- Rewards ---
 
 export function useRewards() {
-  return useQuery<Reward[]>({
+  return useQuery<EnabledReward[]>({
     queryKey: [api.rewards.list.path],
     queryFn: async () => {
       const res = await fetch(api.rewards.list.path);
@@ -86,17 +86,17 @@ export function useRewards() {
   });
 }
 
-export function useBuyReward() {
+export function useRedeemReward() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async (id: number) => {
-      const url = buildUrl(api.rewards.buy.path, { id });
+    mutationFn: async (rewardId: string) => {
+      const url = buildUrl(api.rewards.redeem.path, { rewardId });
       const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.message || "Failed to buy reward");
+        throw new Error(errorData.message || "Failed to redeem reward");
       }
       return res.json();
     },
@@ -104,37 +104,13 @@ export function useBuyReward() {
       queryClient.setQueryData([api.user.get.path], data.userState);
       queryClient.invalidateQueries({ queryKey: [api.user.purchases.path] });
       toast({
-        title: "Reward Purchased!",
-        description: `You bought ${data.purchase.rewardName}!`,
+        title: "Reward Redeemed!",
+        description: `You got ${data.purchase.rewardName}!`,
         className: "bg-secondary text-secondary-foreground border-none font-display",
       });
     },
     onError: (err: Error) => {
-      toast({ title: "Cannot purchase", description: err.message, variant: "destructive" });
-    },
-  });
-}
-
-export function useToggleApproval() {
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-
-  return useMutation({
-    mutationFn: async ({ id, approved }: { id: number; approved: boolean }) => {
-      const url = buildUrl(api.rewards.toggleApproval.path, { id });
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approved }),
-      });
-      if (!res.ok) throw new Error("Failed to update approval");
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.rewards.list.path] });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Cannot redeem", description: err.message, variant: "destructive" });
     },
   });
 }
@@ -183,6 +159,71 @@ export function useUpdateSettings() {
     onSuccess: (data: UserState) => {
       queryClient.setQueryData([api.user.get.path], data);
       toast({ title: "Settings saved!", description: "Your preferences have been updated." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
+// --- Config (Parent Admin) ---
+
+export function useConfig() {
+  return useQuery({
+    queryKey: [api.config.get.path],
+    queryFn: async () => {
+      const res = await fetch(api.config.get.path);
+      if (!res.ok) throw new Error("Failed to fetch config");
+      return res.json();
+    },
+  });
+}
+
+export function useUpdateChoreConfig() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (data: { enabledChores: Record<string, boolean>; pointsByChoreId: Record<string, number> }) => {
+      const res = await fetch(api.config.updateChores.path, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error("Failed to update chore config");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.config.get.path] });
+      queryClient.invalidateQueries({ queryKey: [api.chores.list.path] });
+      queryClient.invalidateQueries({ queryKey: [api.user.get.path] });
+      toast({ title: "Chore settings saved!" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
+export function useUpdateRewardConfig() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (data: { enabledRewards: Record<string, boolean>; costByRewardId: Record<string, number> }) => {
+      const res = await fetch(api.config.updateRewards.path, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error("Failed to update reward config");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.config.get.path] });
+      queryClient.invalidateQueries({ queryKey: [api.rewards.list.path] });
+      queryClient.invalidateQueries({ queryKey: [api.user.get.path] });
+      toast({ title: "Reward settings saved!" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });

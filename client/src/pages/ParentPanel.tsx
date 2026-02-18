@@ -1,23 +1,24 @@
 import { useState, useEffect } from "react";
 import {
-  useUserState, useUpdateSettings, useRewards, useToggleApproval,
-  useAwardBonus, useDailySummary, useSendSummaryEmail, useLedger,
+  useUserState, useUpdateSettings, useConfig,
+  useUpdateChoreConfig, useUpdateRewardConfig,
+  useAwardBonus, useDailySummary, useSendSummaryEmail,
 } from "@/hooks/use-data";
 import { Navigation } from "@/components/Navigation";
 import { Header } from "@/components/Header";
-import { BONUS_REASONS, REWARD_CATEGORIES } from "@shared/schema";
-import type { Reward } from "@shared/schema";
+import { CATALOG } from "@shared/catalog";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
-  Gift, Shield, Mail, Send, Settings, Star, Check, X,
+  Shield, Mail, Send, Settings, Star,
   ChevronDown, ChevronUp, Loader2, DollarSign,
+  CheckSquare, ShoppingBag,
 } from "lucide-react";
 
 function BonusSection() {
   const bonusMutation = useAwardBonus();
-  const [reason, setReason] = useState(BONUS_REASONS[0].id);
+  const [reason, setReason] = useState(CATALOG.bonusReasons[0].id);
   const [points, setPoints] = useState(25);
   const [note, setNote] = useState("");
 
@@ -37,28 +38,28 @@ function BonusSection() {
 
       <div className="space-y-4">
         <div>
-          <label className="text-sm font-bold text-muted-foreground mb-1 block" data-testid="label-bonus-reason">Reason</label>
+          <label className="text-sm font-bold text-muted-foreground mb-1 block">Reason</label>
           <select
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             className="w-full p-3 rounded-xl border bg-background text-foreground font-medium"
             data-testid="select-bonus-reason"
           >
-            {BONUS_REASONS.map((r) => (
-              <option key={r.id} value={r.id}>{r.label}</option>
+            {CATALOG.bonusReasons.map((r) => (
+              <option key={r.id} value={r.id}>{r.name}</option>
             ))}
           </select>
         </div>
 
         <div>
-          <label className="text-sm font-bold text-muted-foreground mb-1 block" data-testid="label-bonus-points">Points (1-300)</label>
-          <div className="flex items-center gap-3">
-            {[10, 25, 50, 100].map(v => (
+          <label className="text-sm font-bold text-muted-foreground mb-1 block">Points (1-5000)</label>
+          <div className="flex items-center gap-2 flex-wrap">
+            {[10, 25, 50, 100, 200].map(v => (
               <button
                 key={v}
                 onClick={() => setPoints(v)}
                 className={cn(
-                  "px-4 py-2 rounded-xl font-bold text-sm border-2 transition-all",
+                  "px-3 py-2 rounded-xl font-bold text-sm border-2 transition-all",
                   points === v
                     ? "bg-foreground text-background border-foreground"
                     : "bg-background text-foreground border-border"
@@ -72,7 +73,7 @@ function BonusSection() {
           <input
             type="range"
             min="1"
-            max="300"
+            max="5000"
             value={points}
             onChange={(e) => setPoints(parseInt(e.target.value))}
             className="w-full mt-2 accent-primary"
@@ -82,12 +83,12 @@ function BonusSection() {
         </div>
 
         <div>
-          <label className="text-sm font-bold text-muted-foreground mb-1 block" data-testid="label-bonus-note">Note (optional)</label>
+          <label className="text-sm font-bold text-muted-foreground mb-1 block">Note (optional)</label>
           <input
             type="text"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="e.g. Put shoes away without asking"
+            placeholder="e.g. Cleaned garage without asking"
             className="w-full p-3 rounded-xl border bg-background text-foreground"
             data-testid="input-bonus-note"
           />
@@ -107,67 +108,88 @@ function BonusSection() {
   );
 }
 
-function ApprovalSection() {
-  const { data: rewards } = useRewards();
-  const { data: userState } = useUserState();
-  const toggleApproval = useToggleApproval();
-  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
+function ChoreConfigSection() {
+  const { data: config } = useConfig();
+  const updateChores = useUpdateChoreConfig();
+  const [localEnabled, setLocalEnabled] = useState<Record<string, boolean>>({});
+  const [localPoints, setLocalPoints] = useState<Record<string, number>>({});
+  const [expandedCat, setExpandedCat] = useState<string | null>(null);
+  const [initialized, setInitialized] = useState(false);
 
-  const grouped: Record<string, Reward[]> = {};
-  rewards?.forEach(r => {
-    if (r.isAllowance && !userState?.allowanceEnabled) return;
-    if (!grouped[r.category]) grouped[r.category] = [];
-    grouped[r.category].push(r);
-  });
+  useEffect(() => {
+    if (config && !initialized) {
+      setLocalEnabled(config.enabledChores || {});
+      setLocalPoints(config.pointsByChoreId || {});
+      setInitialized(true);
+    }
+  }, [config, initialized]);
+
+  const handleSave = () => {
+    updateChores.mutate({ enabledChores: localEnabled, pointsByChoreId: localPoints });
+  };
+
+  const toggleItem = (id: string) => {
+    setLocalEnabled(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const setItemPoints = (id: string, pts: number) => {
+    setLocalPoints(prev => ({ ...prev, [id]: Math.max(0, Math.min(999999, pts)) }));
+  };
 
   return (
     <Card className="p-5">
-      <h3 className="font-display font-bold text-lg mb-4 flex items-center gap-2">
-        <Shield className="w-5 h-5 text-primary" />
-        Reward Approvals
+      <h3 className="font-display font-bold text-lg mb-2 flex items-center gap-2">
+        <CheckSquare className="w-5 h-5 text-primary" />
+        Chore Catalog
       </h3>
-      <p className="text-sm text-muted-foreground mb-4">
-        Only approved rewards can be purchased by kids.
-      </p>
+      <p className="text-sm text-muted-foreground mb-4">Toggle chores on/off and set custom point values.</p>
 
-      <div className="space-y-2">
-        {Object.entries(grouped).map(([category, items]) => {
-          const approvedCount = items.filter(r => r.approved).length;
-          const isExpanded = expandedCategory === category;
+      <div className="space-y-2 mb-4">
+        {CATALOG.chores.map(cat => {
+          const isExpanded = expandedCat === cat.categoryId;
+          const enabledCount = cat.items.filter(i => localEnabled[i.id]).length;
           return (
-            <div key={category} className="border rounded-xl overflow-hidden">
+            <div key={cat.categoryId} className="border rounded-xl overflow-hidden">
               <button
-                onClick={() => setExpandedCategory(isExpanded ? null : category)}
+                onClick={() => setExpandedCat(isExpanded ? null : cat.categoryId)}
                 className="w-full flex items-center justify-between p-4 text-left font-bold"
-                data-testid={`button-category-${category}`}
+                data-testid={`button-chore-cat-${cat.categoryId}`}
               >
-                <span>{category} ({approvedCount}/{items.length})</span>
+                <span>{cat.categoryName} ({enabledCount}/{cat.items.length})</span>
                 {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
               </button>
 
               {isExpanded && (
-                <div className="border-t px-4 pb-3 space-y-2">
-                  {items.map(reward => (
-                    <div key={reward.id} className="flex items-center justify-between py-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xl">{reward.icon}</span>
-                        <div>
-                          <p className="font-bold text-sm">{reward.name}</p>
-                          <p className="text-xs text-muted-foreground font-mono">{reward.cost} pts</p>
-                        </div>
+                <div className="border-t px-4 pb-3 space-y-3">
+                  {cat.items.map(item => (
+                    <div key={item.id} className="flex items-center justify-between py-2 gap-3">
+                      <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!!localEnabled[item.id]}
+                          onChange={() => toggleItem(item.id)}
+                          className="w-5 h-5 rounded accent-primary shrink-0"
+                          data-testid={`checkbox-chore-${item.id}`}
+                        />
+                        <span className={cn(
+                          "font-medium text-sm truncate",
+                          localEnabled[item.id] ? "text-foreground" : "text-muted-foreground"
+                        )}>
+                          {item.name}
+                        </span>
+                      </label>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <input
+                          type="number"
+                          min="1"
+                          max="999999"
+                          value={localPoints[item.id] ?? item.defaultPoints}
+                          onChange={(e) => setItemPoints(item.id, parseInt(e.target.value) || 0)}
+                          className="w-16 p-1.5 rounded-lg border bg-background text-foreground font-mono text-sm text-center"
+                          data-testid={`input-chore-points-${item.id}`}
+                        />
+                        <span className="text-xs text-muted-foreground">pts</span>
                       </div>
-                      <button
-                        onClick={() => toggleApproval.mutate({ id: reward.id, approved: !reward.approved })}
-                        className={cn(
-                          "p-2 rounded-lg transition-all",
-                          reward.approved
-                            ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                            : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                        )}
-                        data-testid={`button-approve-${reward.id}`}
-                      >
-                        {reward.approved ? <Check className="w-5 h-5" /> : <X className="w-5 h-5" />}
-                      </button>
                     </div>
                   ))}
                 </div>
@@ -176,6 +198,136 @@ function ApprovalSection() {
           );
         })}
       </div>
+
+      <Button
+        onClick={handleSave}
+        disabled={updateChores.isPending}
+        className="w-full"
+        data-testid="button-save-chore-config"
+      >
+        {updateChores.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+        Save Chore Settings
+      </Button>
+    </Card>
+  );
+}
+
+function RewardConfigSection() {
+  const { data: config } = useConfig();
+  const { data: userState } = useUserState();
+  const updateRewards = useUpdateRewardConfig();
+  const [localEnabled, setLocalEnabled] = useState<Record<string, boolean>>({});
+  const [localCosts, setLocalCosts] = useState<Record<string, number>>({});
+  const [expandedCat, setExpandedCat] = useState<string | null>(null);
+  const [initialized, setInitialized] = useState(false);
+
+  useEffect(() => {
+    if (config && !initialized) {
+      setLocalEnabled(config.enabledRewards || {});
+      setLocalCosts(config.costByRewardId || {});
+      setInitialized(true);
+    }
+  }, [config, initialized]);
+
+  const handleSave = () => {
+    updateRewards.mutate({ enabledRewards: localEnabled, costByRewardId: localCosts });
+  };
+
+  const toggleItem = (id: string) => {
+    setLocalEnabled(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const setItemCost = (id: string, cost: number) => {
+    setLocalCosts(prev => ({ ...prev, [id]: Math.max(0, Math.min(999999, cost)) }));
+  };
+
+  const filteredCategories = CATALOG.rewards.filter(cat => {
+    if (cat.categoryId === "allowance" && !userState?.allowanceEnabled) return false;
+    return true;
+  });
+
+  return (
+    <Card className="p-5">
+      <h3 className="font-display font-bold text-lg mb-2 flex items-center gap-2">
+        <ShoppingBag className="w-5 h-5 text-secondary" />
+        Reward Catalog
+      </h3>
+      <p className="text-sm text-muted-foreground mb-4">Toggle rewards on/off and set custom costs.</p>
+
+      <div className="space-y-2 mb-4">
+        {filteredCategories.map(cat => {
+          const isExpanded = expandedCat === cat.categoryId;
+          const enabledCount = cat.items.filter(i => localEnabled[i.id]).length;
+          return (
+            <div key={cat.categoryId} className="border rounded-xl overflow-hidden">
+              <button
+                onClick={() => setExpandedCat(isExpanded ? null : cat.categoryId)}
+                className="w-full flex items-center justify-between p-4 text-left font-bold"
+                data-testid={`button-reward-cat-${cat.categoryId}`}
+              >
+                <span>{cat.categoryName} ({enabledCount}/{cat.items.length})</span>
+                {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+
+              {isExpanded && (
+                <div className="border-t px-4 pb-3 space-y-3">
+                  {cat.items.map(item => {
+                    const isAllowance = item.id.startsWith("allow_");
+                    return (
+                      <div key={item.id} className="flex items-center justify-between py-2 gap-3">
+                        <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={!!localEnabled[item.id]}
+                            onChange={() => toggleItem(item.id)}
+                            className="w-5 h-5 rounded accent-secondary shrink-0"
+                            data-testid={`checkbox-reward-${item.id}`}
+                          />
+                          <span className={cn(
+                            "font-medium text-sm truncate",
+                            localEnabled[item.id] ? "text-foreground" : "text-muted-foreground"
+                          )}>
+                            {item.name}
+                          </span>
+                        </label>
+                        {!isAllowance && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <input
+                              type="number"
+                              min="1"
+                              max="999999"
+                              value={localCosts[item.id] ?? item.defaultCost}
+                              onChange={(e) => setItemCost(item.id, parseInt(e.target.value) || 0)}
+                              className="w-20 p-1.5 rounded-lg border bg-background text-foreground font-mono text-sm text-center"
+                              data-testid={`input-reward-cost-${item.id}`}
+                            />
+                            <span className="text-xs text-muted-foreground">pts</span>
+                          </div>
+                        )}
+                        {isAllowance && (
+                          <span className="text-xs text-muted-foreground font-mono">
+                            auto
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <Button
+        onClick={handleSave}
+        disabled={updateRewards.isPending}
+        className="w-full"
+        data-testid="button-save-reward-config"
+      >
+        {updateRewards.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+        Save Reward Settings
+      </Button>
     </Card>
   );
 }
@@ -185,7 +337,7 @@ function SettingsSection() {
   const updateSettings = useUpdateSettings();
   const [email, setEmail] = useState("");
   const [allowance, setAllowance] = useState(false);
-  const [pointsPerDollar, setPointsPerDollar] = useState(300);
+  const [pointsPerDollar, setPointsPerDollar] = useState(600);
 
   useEffect(() => {
     if (userState) {
@@ -212,7 +364,7 @@ function SettingsSection() {
 
       <div className="space-y-4">
         <div>
-          <label className="text-sm font-bold text-muted-foreground mb-1 block" data-testid="label-parent-email">Parent Email (for daily summaries)</label>
+          <label className="text-sm font-bold text-muted-foreground mb-1 block">Parent Email (for daily summaries)</label>
           <input
             type="email"
             value={email}
@@ -223,7 +375,7 @@ function SettingsSection() {
           />
         </div>
 
-        <div className="flex items-center justify-between p-3 rounded-xl border">
+        <div className="flex items-center justify-between gap-2 p-3 rounded-xl border">
           <div>
             <p className="font-bold text-sm">Allowance Mode</p>
             <p className="text-xs text-muted-foreground">Let kids convert points to money</p>
@@ -231,7 +383,7 @@ function SettingsSection() {
           <button
             onClick={() => setAllowance(!allowance)}
             className={cn(
-              "w-12 h-7 rounded-full transition-all relative",
+              "w-12 h-7 rounded-full transition-all relative shrink-0",
               allowance ? "bg-green-500" : "bg-muted"
             )}
             data-testid="button-toggle-allowance"
@@ -245,13 +397,13 @@ function SettingsSection() {
 
         {allowance && (
           <div>
-            <label className="text-sm font-bold text-muted-foreground mb-1 block" data-testid="label-points-per-dollar">
+            <label className="text-sm font-bold text-muted-foreground mb-1 block">
               <DollarSign className="w-4 h-4 inline" /> Points per $1 (currently {pointsPerDollar})
             </label>
             <input
               type="range"
-              min="100"
-              max="500"
+              min="50"
+              max="5000"
               step="50"
               value={pointsPerDollar}
               onChange={(e) => setPointsPerDollar(parseInt(e.target.value))}
@@ -294,17 +446,17 @@ function SummarySection() {
           <div className="grid grid-cols-2 gap-3">
             <div className="bg-green-50 dark:bg-green-900/20 p-3 rounded-xl text-center">
               <p className="text-xs font-bold text-green-700 dark:text-green-400">Completed</p>
-              <p className="text-2xl font-black text-green-600 dark:text-green-300">{summary.completedChores.length}</p>
+              <p className="text-2xl font-black text-green-600 dark:text-green-300" data-testid="text-completed-count">{summary.completedChores.length}</p>
             </div>
             <div className="bg-red-50 dark:bg-red-900/20 p-3 rounded-xl text-center">
               <p className="text-xs font-bold text-red-700 dark:text-red-400">Missed</p>
-              <p className="text-2xl font-black text-red-600 dark:text-red-300">{summary.missedChores.length}</p>
+              <p className="text-2xl font-black text-red-600 dark:text-red-300" data-testid="text-missed-count">{summary.missedChores.length}</p>
             </div>
           </div>
 
-          <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl flex items-center justify-between">
+          <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl flex items-center justify-between gap-2">
             <span className="text-sm font-bold text-blue-700 dark:text-blue-300">Points Today</span>
-            <span className="font-mono font-black text-lg text-blue-600 dark:text-blue-300">
+            <span className="font-mono font-black text-lg text-blue-600 dark:text-blue-300" data-testid="text-points-today">
               {summary.pointsEarnedToday > 0 ? "+" : ""}{summary.pointsEarnedToday}
             </span>
           </div>
@@ -341,7 +493,8 @@ export default function ParentPanel() {
 
       <div className="max-w-md mx-auto px-4 pt-6 space-y-6">
         <BonusSection />
-        <ApprovalSection />
+        <ChoreConfigSection />
+        <RewardConfigSection />
         <SummarySection />
         <SettingsSection />
       </div>

@@ -1,24 +1,30 @@
-
 import { db } from "./db";
 import {
-  chores, badges, rewards, purchases, userState, ledgerEvents, dailySummaries,
-  type Chore, type Badge, type Reward, type Purchase, type UserState, type LedgerEvent, type DailySummary,
+  userState, dailyStatus, badges, purchases, ledgerEvents,
+  type UserState, type DailyStatus, type Badge, type Purchase, type LedgerEvent,
+  type EnabledChore, type EnabledReward,
 } from "@shared/schema";
-import { eq, sql, and, gte, lte, desc } from "drizzle-orm";
+import {
+  CATALOG, STARTER_CHORES, STARTER_REWARDS,
+  flattenCatalog, findCategoryName, clampNumber, localDateKey,
+} from "@shared/catalog";
+import { eq, desc, and, gte, lte } from "drizzle-orm";
 
 export interface IStorage {
-  getChores(): Promise<Chore[]>;
-  toggleChore(id: number): Promise<{ chore: Chore, pointsDelta: number }>;
-  resetChores(): Promise<void>;
-  getRewards(): Promise<Reward[]>;
-  buyReward(rewardId: number): Promise<{ purchase: Purchase, userState: UserState }>;
-  toggleRewardApproval(id: number, approved: boolean): Promise<Reward>;
+  getUserState(): Promise<UserState>;
+  updateSettings(settings: Partial<Pick<UserState, 'parentEmail' | 'allowanceEnabled' | 'pointsPerDollar'>>): Promise<UserState>;
+  updateChoreConfig(enabledChores: Record<string, boolean>, pointsByChoreId: Record<string, number>): Promise<UserState>;
+  updateRewardConfig(enabledRewards: Record<string, boolean>, costByRewardId: Record<string, number>): Promise<UserState>;
+  getEnabledChores(): Promise<EnabledChore[]>;
+  getEnabledRewards(): Promise<EnabledReward[]>;
+  getDailyStatus(): Promise<DailyStatus>;
+  toggleChore(choreId: string): Promise<{ chore: EnabledChore; pointsDelta: number; userState: UserState }>;
+  resetDaily(): Promise<void>;
+  redeemReward(rewardId: string): Promise<{ purchase: Purchase; userState: UserState }>;
   getBadges(): Promise<Badge[]>;
   checkAndAwardBadges(totalLifetimePoints: number): Promise<Badge[]>;
-  getUserState(): Promise<UserState>;
-  updateSettings(settings: Partial<Pick<UserState, 'parentEmail' | 'timezone' | 'dailySummaryTime' | 'allowanceEnabled' | 'pointsPerDollar'>>): Promise<UserState>;
   getPurchases(): Promise<Purchase[]>;
-  awardBonus(reason: string, points: number, note?: string): Promise<{ event: LedgerEvent, userState: UserState }>;
+  awardBonus(reason: string, points: number, note?: string): Promise<{ event: LedgerEvent; userState: UserState }>;
   addLedgerEvent(type: string, refId: string, pointsDelta: number, note?: string): Promise<LedgerEvent>;
   getLedgerEvents(): Promise<LedgerEvent[]>;
   getLedgerEventsForDate(date: string): Promise<LedgerEvent[]>;
@@ -28,111 +34,235 @@ export interface IStorage {
 export class DatabaseStorage implements IStorage {
 
   async getUserState(): Promise<UserState> {
-    let state = await db.select().from(userState).limit(1);
-    if (state.length === 0) {
+    const rows = await db.select().from(userState).limit(1);
+    if (rows.length === 0) {
+      const enabledChores: Record<string, boolean> = {};
+      const enabledRewards: Record<string, boolean> = {};
+      const pointsByChoreId: Record<string, number> = {};
+      const costByRewardId: Record<string, number> = {};
+
+      flattenCatalog(CATALOG.chores).forEach(c => {
+        enabledChores[c.id] = STARTER_CHORES.includes(c.id);
+        pointsByChoreId[c.id] = c.defaultPoints;
+      });
+      flattenCatalog(CATALOG.rewards).forEach(r => {
+        const isAllowance = r.id.startsWith("allow_");
+        enabledRewards[r.id] = STARTER_REWARDS.includes(r.id) && !isAllowance;
+        costByRewardId[r.id] = r.defaultCost;
+      });
+
       const [newState] = await db.insert(userState).values({
         totalPoints: 0,
         totalEarnedLifetime: 0,
         allowanceEnabled: false,
-        pointsPerDollar: 300,
+        pointsPerDollar: 600,
+        enabledChores,
+        enabledRewards,
+        pointsByChoreId,
+        costByRewardId,
       }).returning();
       return newState;
     }
-    return state[0];
+    return rows[0];
   }
 
-  async updateSettings(settings: Partial<Pick<UserState, 'parentEmail' | 'timezone' | 'dailySummaryTime' | 'allowanceEnabled' | 'pointsPerDollar'>>): Promise<UserState> {
+  async updateSettings(settings: Partial<Pick<UserState, 'parentEmail' | 'allowanceEnabled' | 'pointsPerDollar'>>): Promise<UserState> {
     const state = await this.getUserState();
+    const updateData: any = { ...settings };
+
+    if (settings.allowanceEnabled !== undefined) {
+      const ppd = clampNumber(settings.pointsPerDollar ?? state.pointsPerDollar, 50, 5000);
+      const costByRewardId = (state.costByRewardId as Record<string, number>) || {};
+      costByRewardId["allow_1"] = ppd * 1;
+      costByRewardId["allow_5"] = ppd * 5;
+      costByRewardId["allow_10"] = ppd * 10;
+      updateData.costByRewardId = costByRewardId;
+      updateData.pointsPerDollar = ppd;
+
+      if (!settings.allowanceEnabled) {
+        const enabledRewards = (state.enabledRewards as Record<string, boolean>) || {};
+        Object.keys(enabledRewards).forEach(id => {
+          if (id.startsWith("allow_")) enabledRewards[id] = false;
+        });
+        updateData.enabledRewards = enabledRewards;
+      }
+    }
+
     const [updated] = await db.update(userState)
-      .set(settings)
+      .set(updateData)
       .where(eq(userState.id, state.id))
       .returning();
     return updated;
   }
 
-  async getChores(): Promise<Chore[]> {
-    return await db.select().from(chores).orderBy(chores.id);
-  }
-
-  async toggleChore(id: number): Promise<{ chore: Chore, pointsDelta: number }> {
-    const [current] = await db.select().from(chores).where(eq(chores.id, id));
-    if (!current) throw new Error("Chore not found");
-
-    const newCompleted = !current.completed;
-    const [updated] = await db.update(chores)
-      .set({ completed: newCompleted })
-      .where(eq(chores.id, id))
-      .returning();
-
-    const pointsDelta = newCompleted ? current.points : -current.points;
-
+  async updateChoreConfig(enabledChores: Record<string, boolean>, pointsByChoreId: Record<string, number>): Promise<UserState> {
     const state = await this.getUserState();
-    let newTotal = state.totalPoints + pointsDelta;
-    if (newTotal < 0) newTotal = 0;
+    const existingEnabled = (state.enabledChores as Record<string, boolean>) || {};
+    const existingPoints = (state.pointsByChoreId as Record<string, number>) || {};
 
-    const updateData: any = { totalPoints: newTotal };
-    if (newCompleted) {
-      updateData.totalEarnedLifetime = state.totalEarnedLifetime + current.points;
-    }
+    const merged = { ...existingEnabled, ...enabledChores };
+    const mergedPoints = { ...existingPoints, ...pointsByChoreId };
 
-    await db.update(userState)
-      .set(updateData)
-      .where(eq(userState.id, state.id));
-
-    await this.addLedgerEvent(
-      newCompleted ? "CHORE_COMPLETE" : "CHORE_UNCHECK",
-      current.name,
-      pointsDelta,
-    );
-
-    return { chore: updated, pointsDelta };
-  }
-
-  async resetChores(): Promise<void> {
-    await db.update(chores).set({ completed: false });
-  }
-
-  async getRewards(): Promise<Reward[]> {
-    return await db.select().from(rewards).where(eq(rewards.active, true)).orderBy(rewards.category, rewards.cost);
-  }
-
-  async toggleRewardApproval(id: number, approved: boolean): Promise<Reward> {
-    const [reward] = await db.select().from(rewards).where(eq(rewards.id, id));
-    if (!reward) throw new Error("Reward not found");
-
-    const [updated] = await db.update(rewards)
-      .set({ approved })
-      .where(eq(rewards.id, id))
+    const [updated] = await db.update(userState)
+      .set({ enabledChores: merged, pointsByChoreId: mergedPoints })
+      .where(eq(userState.id, state.id))
       .returning();
     return updated;
   }
 
-  async buyReward(rewardId: number): Promise<{ purchase: Purchase, userState: UserState }> {
-    const [reward] = await db.select().from(rewards).where(eq(rewards.id, rewardId));
-    if (!reward) throw new Error("Reward not found");
-    if (!reward.approved) throw new Error("This reward needs parent approval first");
-
+  async updateRewardConfig(enabledRewards: Record<string, boolean>, costByRewardId: Record<string, number>): Promise<UserState> {
     const state = await this.getUserState();
-    if (state.totalPoints < reward.cost) {
-      throw new Error("Not enough points");
-    }
+    const existingEnabled = (state.enabledRewards as Record<string, boolean>) || {};
+    const existingCosts = (state.costByRewardId as Record<string, number>) || {};
 
-    if (reward.isAllowance && !state.allowanceEnabled) {
-      throw new Error("Allowance is not enabled");
+    const merged = { ...existingEnabled, ...enabledRewards };
+    const mergedCosts = { ...existingCosts, ...costByRewardId };
+
+    const [updated] = await db.update(userState)
+      .set({ enabledRewards: merged, costByRewardId: mergedCosts })
+      .where(eq(userState.id, state.id))
+      .returning();
+    return updated;
+  }
+
+  async getEnabledChores(): Promise<EnabledChore[]> {
+    const state = await this.getUserState();
+    const daily = await this.getDailyStatus();
+    const enabledMap = (state.enabledChores as Record<string, boolean>) || {};
+    const pointsMap = (state.pointsByChoreId as Record<string, number>) || {};
+    const completedMap = (daily.completedChores as Record<string, boolean>) || {};
+
+    const allChores = flattenCatalog(CATALOG.chores);
+    return allChores
+      .filter(c => enabledMap[c.id])
+      .map(c => ({
+        id: c.id,
+        name: c.name,
+        points: clampNumber(pointsMap[c.id] ?? c.defaultPoints, 0, 999999),
+        completed: Boolean(completedMap[c.id]),
+        categoryName: findCategoryName(CATALOG.chores, c.id),
+      }));
+  }
+
+  async getEnabledRewards(): Promise<EnabledReward[]> {
+    const state = await this.getUserState();
+    const enabledMap = (state.enabledRewards as Record<string, boolean>) || {};
+    const costMap = (state.costByRewardId as Record<string, number>) || {};
+
+    const allRewards = flattenCatalog(CATALOG.rewards);
+    return allRewards
+      .filter(r => {
+        if (r.id.startsWith("allow_") && !state.allowanceEnabled) return false;
+        return enabledMap[r.id];
+      })
+      .map(r => ({
+        id: r.id,
+        name: r.name,
+        cost: clampNumber(costMap[r.id] ?? r.defaultCost, 0, 999999),
+        category: findCategoryName(CATALOG.rewards, r.id),
+      }));
+  }
+
+  async getDailyStatus(): Promise<DailyStatus> {
+    const today = localDateKey(new Date());
+    const rows = await db.select().from(dailyStatus).where(eq(dailyStatus.dateKey, today)).limit(1);
+    if (rows.length === 0) {
+      const [newStatus] = await db.insert(dailyStatus).values({
+        dateKey: today,
+        completedChores: {},
+      }).returning();
+      return newStatus;
+    }
+    return rows[0];
+  }
+
+  async toggleChore(choreId: string): Promise<{ chore: EnabledChore; pointsDelta: number; userState: UserState }> {
+    const state = await this.getUserState();
+    const enabledMap = (state.enabledChores as Record<string, boolean>) || {};
+    if (!enabledMap[choreId]) throw new Error("Chore not enabled");
+
+    const daily = await this.getDailyStatus();
+    const completedMap = (daily.completedChores as Record<string, boolean>) || {};
+    const wasDone = Boolean(completedMap[choreId]);
+    const nowDone = !wasDone;
+
+    completedMap[choreId] = nowDone;
+    await db.update(dailyStatus)
+      .set({ completedChores: completedMap })
+      .where(eq(dailyStatus.id, daily.id));
+
+    const pointsMap = (state.pointsByChoreId as Record<string, number>) || {};
+    const choreItem = flattenCatalog(CATALOG.chores).find(c => c.id === choreId);
+    const pts = clampNumber(pointsMap[choreId] ?? choreItem?.defaultPoints ?? 0, 0, 999999);
+    const pointsDelta = nowDone ? pts : -pts;
+
+    let newTotal = Math.max(0, state.totalPoints + pointsDelta);
+    const updateData: any = { totalPoints: newTotal };
+    if (nowDone) {
+      updateData.totalEarnedLifetime = state.totalEarnedLifetime + pts;
     }
 
     const [newState] = await db.update(userState)
-      .set({ totalPoints: state.totalPoints - reward.cost })
+      .set(updateData)
+      .where(eq(userState.id, state.id))
+      .returning();
+
+    await this.addLedgerEvent(
+      nowDone ? "chore_completed" : "chore_unchecked",
+      choreId,
+      pointsDelta,
+    );
+
+    const chore: EnabledChore = {
+      id: choreId,
+      name: choreItem?.name || choreId,
+      points: pts,
+      completed: nowDone,
+      categoryName: findCategoryName(CATALOG.chores, choreId),
+    };
+
+    return { chore, pointsDelta, userState: newState };
+  }
+
+  async resetDaily(): Promise<void> {
+    const today = localDateKey(new Date());
+    const rows = await db.select().from(dailyStatus).where(eq(dailyStatus.dateKey, today)).limit(1);
+    if (rows.length > 0) {
+      await db.update(dailyStatus)
+        .set({ completedChores: {} })
+        .where(eq(dailyStatus.id, rows[0].id));
+    }
+  }
+
+  async redeemReward(rewardId: string): Promise<{ purchase: Purchase; userState: UserState }> {
+    const state = await this.getUserState();
+    const enabledMap = (state.enabledRewards as Record<string, boolean>) || {};
+    if (!enabledMap[rewardId]) throw new Error("Reward not enabled");
+
+    if (rewardId.startsWith("allow_") && !state.allowanceEnabled) {
+      throw new Error("Allowance is not enabled");
+    }
+
+    const rewardItem = flattenCatalog(CATALOG.rewards).find(r => r.id === rewardId);
+    if (!rewardItem) throw new Error("Reward not found in catalog");
+
+    const costMap = (state.costByRewardId as Record<string, number>) || {};
+    const cost = clampNumber(costMap[rewardId] ?? rewardItem.defaultCost, 0, 999999);
+
+    if (state.totalPoints < cost) throw new Error("Not enough points");
+
+    const [newState] = await db.update(userState)
+      .set({ totalPoints: state.totalPoints - cost })
       .where(eq(userState.id, state.id))
       .returning();
 
     const [purchase] = await db.insert(purchases).values({
-      rewardId: reward.id,
-      rewardName: reward.name,
-      cost: reward.cost,
+      rewardId,
+      rewardName: rewardItem.name,
+      cost,
     }).returning();
 
-    await this.addLedgerEvent("REWARD_REDEEM", reward.name, -reward.cost);
+    await this.addLedgerEvent("purchase", rewardId, -cost);
 
     return { purchase, userState: newState };
   }
@@ -142,32 +272,32 @@ export class DatabaseStorage implements IStorage {
   }
 
   async checkAndAwardBadges(totalLifetimePoints: number): Promise<Badge[]> {
-    const newlyEarned = await db.select().from(badges)
-      .where(sql`${badges.earned} = false AND ${badges.threshold} <= ${totalLifetimePoints}`);
+    const allBadges = await db.select().from(badges);
+    const newlyEarned = allBadges.filter(b => !b.earned && b.threshold <= totalLifetimePoints);
 
-    if (newlyEarned.length > 0) {
-      const ids = newlyEarned.map(b => b.id);
-      await db.update(badges).set({ earned: true }).where(sql`${badges.id} IN ${ids}`);
+    for (const badge of newlyEarned) {
+      await db.update(badges).set({ earned: true }).where(eq(badges.id, badge.id));
     }
 
     return newlyEarned;
   }
 
   async getPurchases(): Promise<Purchase[]> {
-    return await db.select().from(purchases).orderBy(sql`${purchases.purchasedAt} DESC`);
+    return await db.select().from(purchases).orderBy(desc(purchases.purchasedAt));
   }
 
-  async awardBonus(reason: string, points: number, note?: string): Promise<{ event: LedgerEvent, userState: UserState }> {
+  async awardBonus(reason: string, points: number, note?: string): Promise<{ event: LedgerEvent; userState: UserState }> {
+    const p = clampNumber(points, 0, 5000);
     const state = await this.getUserState();
-    const newTotal = state.totalPoints + points;
-    const newLifetime = state.totalEarnedLifetime + points;
+    const newTotal = state.totalPoints + p;
+    const newLifetime = state.totalEarnedLifetime + p;
 
     const [newState] = await db.update(userState)
       .set({ totalPoints: newTotal, totalEarnedLifetime: newLifetime })
       .where(eq(userState.id, state.id))
       .returning();
 
-    const event = await this.addLedgerEvent("BONUS_AWARD", reason, points, note);
+    const event = await this.addLedgerEvent("bonus_award", reason, p, note);
 
     return { event, userState: newState };
   }
@@ -198,76 +328,19 @@ export class DatabaseStorage implements IStorage {
   }
 
   async seedData(): Promise<void> {
-    const existingChores = await this.getChores();
-    if (existingChores.length > 0) return;
+    await this.getUserState();
 
-    await db.insert(chores).values([
-      { name: "Make bed", points: 10, section: "morning", icon: "🛏️" },
-      { name: "Put clothes in hamper", points: 10, section: "morning", icon: "🧺" },
-      { name: "Clean room (quick)", points: 30, section: "general", icon: "🧹" },
-      { name: "Clean room (deep)", points: 100, section: "general", icon: "🧼" },
-      { name: "Dishes helper", points: 25, section: "general", icon: "🍽️" },
-      { name: "Feed pet", points: 15, section: "bedtime", icon: "🐾" },
-      { name: "Homework done", points: 50, section: "afterSchool", icon: "📚" },
-      { name: "Pick up toys", points: 15, section: "afterSchool", icon: "🧸" },
-    ]);
+    const existingBadges = await this.getBadges();
+    if (existingBadges.length > 0) return;
 
     await db.insert(badges).values([
-      { name: "Starter Badge", threshold: 50, icon: "🥉", description: "Earn your first 50 points!" },
-      { name: "Helper Level 2", threshold: 150, icon: "🥈", description: "Getting serious!" },
-      { name: "Chore Master", threshold: 300, icon: "🥇", description: "Legendary status!" },
-      { name: "Super Star", threshold: 500, icon: "⭐", description: "500 points earned!" },
-      { name: "Champion", threshold: 1000, icon: "🏆", description: "Unstoppable!" },
-      { name: "Legend", threshold: 2000, icon: "👑", description: "Absolute legend!" },
+      { name: "Starter Badge", threshold: 50, icon: "medal_bronze", description: "Earn your first 50 points!" },
+      { name: "Helper Level 2", threshold: 150, icon: "medal_silver", description: "Getting serious!" },
+      { name: "Chore Master", threshold: 300, icon: "medal_gold", description: "Legendary status!" },
+      { name: "Super Star", threshold: 500, icon: "star", description: "500 points earned!" },
+      { name: "Champion", threshold: 1000, icon: "trophy", description: "Unstoppable!" },
+      { name: "Legend", threshold: 2000, icon: "crown", description: "Absolute legend!" },
     ]);
-
-    await db.insert(rewards).values([
-      // Experiences (700-1200+)
-      { name: "Arcade Trip", cost: 900, icon: "🕹️", category: "Experiences", approved: false },
-      { name: "Movie Night Out", cost: 1000, icon: "🎬", category: "Experiences", approved: false },
-      { name: "Bowling", cost: 800, icon: "🎳", category: "Experiences", approved: false },
-      { name: "Mini Golf", cost: 700, icon: "⛳", category: "Experiences", approved: false },
-      { name: "Water Park", cost: 1200, icon: "🏊", category: "Experiences", approved: false },
-      // Privileges (400-1800)
-      { name: "Stay Up 30 Min Late", cost: 400, icon: "🌙", category: "Privileges", approved: false },
-      { name: "Extra Screen Time (1hr)", cost: 500, icon: "📱", category: "Privileges", approved: false },
-      { name: "Pick Dinner Menu", cost: 450, icon: "🍕", category: "Privileges", approved: false },
-      { name: "No Chores Day", cost: 1800, icon: "🎉", category: "Privileges", approved: false },
-      { name: "Sleepover with Friend", cost: 1500, icon: "🏠", category: "Privileges", approved: false },
-      // Food Treats (300-800)
-      { name: "Ice Cream", cost: 300, icon: "🍦", category: "Food Treats", approved: false },
-      { name: "Special Snack", cost: 350, icon: "🍿", category: "Food Treats", approved: false },
-      { name: "Bake Cookies Together", cost: 400, icon: "🍪", category: "Food Treats", approved: false },
-      { name: "Restaurant Meal", cost: 800, icon: "🍔", category: "Food Treats", approved: false },
-      { name: "Smoothie Run", cost: 450, icon: "🥤", category: "Food Treats", approved: false },
-      // Creativity (450-900)
-      { name: "Art Supplies", cost: 600, icon: "🎨", category: "Creativity", approved: false },
-      { name: "Build a Fort", cost: 450, icon: "🏰", category: "Creativity", approved: false },
-      { name: "Craft Project", cost: 500, icon: "✂️", category: "Creativity", approved: false },
-      { name: "LEGO Set", cost: 900, icon: "🧱", category: "Creativity", approved: false },
-      // Family / Connection (500-800)
-      { name: "Pick a Family Game", cost: 500, icon: "🎲", category: "Family / Connection", approved: false },
-      { name: "Family Movie Pick", cost: 600, icon: "🎥", category: "Family / Connection", approved: false },
-      { name: "Parent Date (1-on-1)", cost: 700, icon: "❤️", category: "Family / Connection", approved: false },
-      { name: "Campfire + S'mores", cost: 800, icon: "🔥", category: "Family / Connection", approved: false },
-      // Skills / Sports (450-650)
-      { name: "New Book", cost: 450, icon: "📖", category: "Skills / Sports", approved: false },
-      { name: "Sports Equipment", cost: 650, icon: "⚽", category: "Skills / Sports", approved: false },
-      { name: "Bike Ride Adventure", cost: 500, icon: "🚴", category: "Skills / Sports", approved: false },
-      // Toys / Items (800-2500+)
-      { name: "Small Toy", cost: 800, icon: "🧸", category: "Toys / Items", approved: false },
-      { name: "Trading Cards Pack", cost: 900, icon: "🃏", category: "Toys / Items", approved: false },
-      { name: "Big Toy", cost: 2500, icon: "🎁", category: "Toys / Items", approved: false },
-      // Surprise (900-2200+)
-      { name: "Mystery Surprise", cost: 900, icon: "🎊", category: "Surprise", approved: false },
-      { name: "Big Surprise", cost: 2200, icon: "🌟", category: "Surprise", approved: false },
-      // Allowance
-      { name: "$1 Allowance", cost: 300, icon: "💵", category: "Allowance", approved: false, isAllowance: true },
-      { name: "$5 Allowance", cost: 1500, icon: "💰", category: "Allowance", approved: false, isAllowance: true },
-      { name: "$10 Allowance", cost: 3000, icon: "🤑", category: "Allowance", approved: false, isAllowance: true },
-    ]);
-
-    await this.getUserState();
   }
 }
 
