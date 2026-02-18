@@ -1,0 +1,995 @@
+Awesome — here’s a complete copy/paste MVP you can drop into a new Replit HTML/CSS/JS project.
+
+1) index.html
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Chore Helper</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">⭐</div>
+      <div>
+        <div class="title">Chore Helper</div>
+        <div class="subtitle">Checklist • Points • Badges • Store</div>
+      </div>
+    </div>
+
+    <div class="points-pill" id="pointsPill">
+      <span class="pill-label">Points</span>
+      <span class="pill-value" id="pointsTotal">0</span>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Character card -->
+    <section class="card hero">
+      <div class="hero-left">
+        <div class="character" id="character">🧙‍♂️</div>
+        <div class="hero-text">
+          <div class="hero-title">Today’s Mission</div>
+          <div class="hero-subtitle" id="missionLine">Do chores. Earn points. Buy rewards.</div>
+        </div>
+      </div>
+      <button class="btn btn-ghost" id="resetDailyBtn" title="Reset chores for tomorrow">
+        Reset for Tomorrow ↻
+      </button>
+    </section>
+
+    <!-- Big nav buttons -->
+    <section class="nav-grid">
+      <button class="btn btn-big" data-view="checklist">✅ My Checklist</button>
+      <button class="btn btn-big" data-view="todo">📋 To Do</button>
+      <button class="btn btn-big" data-view="points">🏆 Points</button>
+      <button class="btn btn-big" data-view="store">🛒 Store</button>
+    </section>
+
+    <!-- Views -->
+    <section class="card view" id="view-checklist">
+      <h2>✅ My Checklist</h2>
+      <p class="muted">Tap a chore to complete it and earn points.</p>
+      <div class="list" id="choresList"></div>
+    </section>
+
+    <section class="card view hidden" id="view-todo">
+      <h2>📋 To Do (Simple Routine)</h2>
+      <p class="muted">This is your “daily routine” list. Keep it simple.</p>
+
+      <div class="routine">
+        <div class="routine-block">
+          <div class="routine-title">🌅 Morning</div>
+          <div class="list" id="routineMorning"></div>
+        </div>
+        <div class="routine-block">
+          <div class="routine-title">🏫 After School</div>
+          <div class="list" id="routineAfterSchool"></div>
+        </div>
+        <div class="routine-block">
+          <div class="routine-title">🌙 Bedtime</div>
+          <div class="list" id="routineBedtime"></div>
+        </div>
+      </div>
+
+      <div class="tip">
+        Tip: We can add timers and reminders later. MVP = checklists + points.
+      </div>
+    </section>
+
+    <section class="card view hidden" id="view-points">
+      <h2>🏆 Points & Badges</h2>
+
+      <div class="big-number">
+        <div class="big-label">Total Points</div>
+        <div class="big-value" id="pointsBig">0</div>
+      </div>
+
+      <h3>⭐ Badges</h3>
+      <div class="badges" id="badgesGrid"></div>
+
+      <h3>🧾 Purchases</h3>
+      <div class="list" id="purchaseList"></div>
+      <p class="muted small">Purchases are tracked so you can remember what you bought.</p>
+    </section>
+
+    <section class="card view hidden" id="view-store">
+      <h2>🛒 Store</h2>
+      <p class="muted">Spend points on rewards. (Parents can approve in real life.)</p>
+      <div class="store" id="storeGrid"></div>
+    </section>
+  </main>
+
+  <!-- Toast -->
+  <div class="toast hidden" id="toast"></div>
+
+  <!-- Modal -->
+  <div class="modal-backdrop hidden" id="modalBackdrop">
+    <div class="modal">
+      <div class="modal-title" id="modalTitle">Confirm</div>
+      <div class="modal-body" id="modalBody">Are you sure?</div>
+      <div class="modal-actions">
+        <button class="btn" id="modalCancel">Cancel</button>
+        <button class="btn btn-primary" id="modalConfirm">Yes</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
+
+2) style.css
+
+:root{
+  --bg:#0b0f17;
+  --card:#111827;
+  --card2:#0f172a;
+  --text:#e5e7eb;
+  --muted:#9ca3af;
+  --accent:#22c55e;
+  --accent2:#60a5fa;
+  --danger:#ef4444;
+  --shadow: 0 10px 25px rgba(0,0,0,.35);
+  --radius: 18px;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  background: radial-gradient(1200px 600px at 20% 0%, #0f1b3a 0%, var(--bg) 55%);
+  color:var(--text);
+}
+
+.topbar{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:16px 18px;
+  gap:12px;
+}
+
+.brand{
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+
+.logo{
+  width:44px;
+  height:44px;
+  display:grid;
+  place-items:center;
+  border-radius:14px;
+  background: linear-gradient(135deg, #1f2937, #0b1226);
+  box-shadow: var(--shadow);
+  font-size:22px;
+}
+
+.title{
+  font-weight:800;
+  letter-spacing:.2px;
+  font-size:18px;
+}
+.subtitle{
+  color:var(--muted);
+  font-size:12px;
+  margin-top:2px;
+}
+
+.points-pill{
+  background: linear-gradient(135deg, #0f172a, #111827);
+  border:1px solid rgba(255,255,255,.08);
+  padding:10px 14px;
+  border-radius:999px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  box-shadow: var(--shadow);
+  min-width:120px;
+  justify-content:space-between;
+}
+.pill-label{color:var(--muted); font-weight:600; font-size:12px;}
+.pill-value{font-weight:900; font-size:18px;}
+
+.container{
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 0 16px 40px;
+}
+
+.card{
+  background: linear-gradient(135deg, var(--card), var(--card2));
+  border:1px solid rgba(255,255,255,.08);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding:16px;
+  margin-top:14px;
+}
+
+.hero{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.hero-left{
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+.character{
+  width:56px;
+  height:56px;
+  display:grid;
+  place-items:center;
+  border-radius:16px;
+  background: rgba(255,255,255,.06);
+  font-size:30px;
+}
+.hero-title{font-size:16px; font-weight:800;}
+.hero-subtitle{color:var(--muted); margin-top:2px; font-size:13px;}
+
+.nav-grid{
+  margin-top:14px;
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap:12px;
+}
+
+.btn{
+  border:none;
+  border-radius: 16px;
+  padding:12px 14px;
+  font-weight:800;
+  font-size:14px;
+  cursor:pointer;
+  color:var(--text);
+  background: rgba(255,255,255,.07);
+  border:1px solid rgba(255,255,255,.10);
+  transition: transform .06s ease, background .2s ease;
+}
+.btn:hover{background: rgba(255,255,255,.10);}
+.btn:active{transform: scale(.99);}
+.btn-big{
+  padding:18px 14px;
+  font-size:18px;
+  min-height:64px;
+}
+.btn-primary{
+  background: linear-gradient(135deg, #16a34a, #22c55e);
+  border:none;
+  color:#06110b;
+}
+.btn-primary:hover{filter: brightness(1.05);}
+.btn-ghost{
+  background: transparent;
+  border:1px dashed rgba(255,255,255,.2);
+  color:var(--muted);
+}
+.btn-ghost:hover{background: rgba(255,255,255,.06); color:var(--text);}
+
+.view h2{margin:0 0 8px;}
+.view h3{margin:16px 0 8px;}
+.muted{color:var(--muted); margin:0 0 12px;}
+.small{font-size:12px;}
+
+.hidden{display:none;}
+
+.list{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+.row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 12px;
+  border-radius: 16px;
+  background: rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.08);
+}
+.row-left{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  min-width: 0;
+}
+.check{
+  width:34px;
+  height:34px;
+  border-radius: 12px;
+  display:grid;
+  place-items:center;
+  font-size:18px;
+  background: rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.12);
+}
+.name{
+  font-weight:800;
+  font-size:15px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.points{
+  font-weight:900;
+  padding:6px 10px;
+  border-radius: 999px;
+  background: rgba(34,197,94,.16);
+  border:1px solid rgba(34,197,94,.25);
+  color:#b9ffd2;
+}
+.row.completed{
+  outline: 2px solid rgba(34,197,94,.35);
+}
+.row.completed .check{
+  background: rgba(34,197,94,.2);
+  border-color: rgba(34,197,94,.35);
+}
+.row.completed .name{
+  text-decoration: line-through;
+  color: rgba(229,231,235,.85);
+}
+
+.big-number{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-end;
+  gap:12px;
+  padding:14px;
+  border-radius: var(--radius);
+  background: rgba(96,165,250,.10);
+  border:1px solid rgba(96,165,250,.22);
+}
+.big-label{color:var(--muted); font-weight:700;}
+.big-value{font-size:40px; font-weight:1000; letter-spacing:.5px;}
+
+.badges{
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap:10px;
+}
+.badge{
+  padding:12px;
+  border-radius: 16px;
+  background: rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.08);
+}
+.badge-top{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+}
+.badge-name{font-weight:900;}
+.badge-threshold{color:var(--muted); font-weight:800; font-size:12px;}
+.badge-status{
+  margin-top:8px;
+  font-weight:800;
+  color:var(--muted);
+}
+.badge.earned{
+  outline: 2px solid rgba(96,165,250,.35);
+}
+.badge.earned .badge-status{
+  color:#cfe5ff;
+  font-weight:900;
+}
+
+.store{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap:12px;
+}
+.store-item{
+  padding:14px;
+  border-radius: 16px;
+  background: rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.08);
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.store-name{font-weight:950; font-size:16px;}
+.store-cost{color:var(--muted); font-weight:900;}
+.store-actions{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:10px;
+}
+.store-actions .btn{
+  width:100%;
+}
+.btn-disabled{
+  opacity:.45;
+  cursor:not-allowed;
+}
+
+.routine{
+  display:grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap:12px;
+}
+.routine-block{
+  padding:12px;
+  border-radius: 16px;
+  background: rgba(255,255,255,.04);
+  border:1px solid rgba(255,255,255,.08);
+}
+.routine-title{
+  font-weight:950;
+  margin-bottom:10px;
+}
+
+.tip{
+  margin-top:12px;
+  padding:12px;
+  border-radius: 16px;
+  background: rgba(34,197,94,.08);
+  border:1px solid rgba(34,197,94,.18);
+  color:#c8ffd9;
+  font-weight:700;
+}
+
+/* Toast */
+.toast{
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,.75);
+  border:1px solid rgba(255,255,255,.12);
+  padding:12px 14px;
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  font-weight:900;
+  max-width: 92vw;
+  text-align:center;
+}
+
+/* Modal */
+.modal-backdrop{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  display:grid;
+  place-items:center;
+  padding:18px;
+}
+.modal{
+  width: min(520px, 96vw);
+  background: linear-gradient(135deg, var(--card), var(--card2));
+  border-radius: var(--radius);
+  border:1px solid rgba(255,255,255,.10);
+  box-shadow: var(--shadow);
+  padding:16px;
+}
+.modal-title{font-weight:1000; font-size:18px;}
+.modal-body{color:var(--muted); margin-top:10px; font-weight:700;}
+.modal-actions{
+  display:flex;
+  gap:10px;
+  justify-content:flex-end;
+  margin-top:14px;
+}
+
+/* Responsive */
+@media (max-width: 560px){
+  .nav-grid{grid-template-columns: 1fr;}
+  .store{grid-template-columns: 1fr;}
+  .badges{grid-template-columns: 1fr;}
+  .hero{flex-direction:column; align-items:flex-start;}
+  .points-pill{min-width: 0;}
+}
+
+3) script.js
+
+// Chore Helper MVP
+// Replit-friendly: no frameworks, simple state, localStorage persistence.
+
+const STORAGE_KEY = "choreHelperState_v1";
+
+const DEFAULT_STATE = {
+  points: 0,
+  chores: [
+    { id: "make_bed", name: "Make bed", points: 10, completed: false },
+    { id: "hamper", name: "Put clothes in hamper", points: 10, completed: false },
+    { id: "pick_up_toys", name: "Pick up toys", points: 15, completed: false },
+    { id: "feed_pet", name: "Feed pet", points: 15, completed: false },
+    { id: "dishes_helper", name: "Dishes helper", points: 25, completed: false },
+    { id: "clean_room_quick", name: "Clean room (quick)", points: 30, completed: false },
+    { id: "homework_done", name: "Homework done", points: 50, completed: false },
+    { id: "clean_room_deep", name: "Clean room (deep)", points: 100, completed: false }
+  ],
+  // Simple routine: reuse chores by ID
+  routine: {
+    morning: ["make_bed", "hamper"],
+    afterSchool: ["homework_done", "pick_up_toys"],
+    bedtime: ["clean_room_quick", "feed_pet"]
+  },
+  badges: [
+    { id: "b50", name: "Starter Badge", threshold: 50, earned: false },
+    { id: "b150", name: "Helper Level 2", threshold: 150, earned: false },
+    { id: "b300", name: "Chore Master", threshold: 300, earned: false }
+  ],
+  store: [
+    { id: "family_game", name: "Pick a family game", cost: 60 },
+    { id: "treat", name: "Treat / Food", cost: 75 },
+    { id: "build_house", name: "Build a house (creative time)", cost: 120 },
+    { id: "arcade", name: "Arcade", cost: 200 }
+  ],
+  purchases: [] // { itemId, name, cost, ts }
+};
+
+let state = loadState();
+
+// ---------- DOM ----------
+const pointsTotalEl = document.getElementById("pointsTotal");
+const pointsBigEl = document.getElementById("pointsBig");
+const choresListEl = document.getElementById("choresList");
+const badgesGridEl = document.getElementById("badgesGrid");
+const storeGridEl = document.getElementById("storeGrid");
+const purchaseListEl = document.getElementById("purchaseList");
+const toastEl = document.getElementById("toast");
+
+const viewChecklist = document.getElementById("view-checklist");
+const viewTodo = document.getElementById("view-todo");
+const viewPoints = document.getElementById("view-points");
+const viewStore = document.getElementById("view-store");
+
+const resetDailyBtn = document.getElementById("resetDailyBtn");
+
+const routineMorningEl = document.getElementById("routineMorning");
+const routineAfterSchoolEl = document.getElementById("routineAfterSchool");
+const routineBedtimeEl = document.getElementById("routineBedtime");
+
+const modalBackdrop = document.getElementById("modalBackdrop");
+const modalTitle = document.getElementById("modalTitle");
+const modalBody = document.getElementById("modalBody");
+const modalCancel = document.getElementById("modalCancel");
+const modalConfirm = document.getElementById("modalConfirm");
+
+let modalAction = null;
+
+// ---------- INIT ----------
+wireNavButtons();
+wireResetButton();
+wireModalButtons();
+render();
+
+// ---------- Functions ----------
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return structuredClone(DEFAULT_STATE);
+    const parsed = JSON.parse(raw);
+
+    // Basic merge to handle upgrades safely:
+    // If something is missing, fall back to defaults.
+    const merged = structuredClone(DEFAULT_STATE);
+    merged.points = clampNumber(parsed.points, 0, 999999);
+
+    merged.chores = Array.isArray(parsed.chores) ? parsed.chores : merged.chores;
+    merged.routine = parsed.routine || merged.routine;
+    merged.badges = Array.isArray(parsed.badges) ? parsed.badges : merged.badges;
+    merged.store = Array.isArray(parsed.store) ? parsed.store : merged.store;
+    merged.purchases = Array.isArray(parsed.purchases) ? parsed.purchases : merged.purchases;
+
+    // Ensure required fields exist
+    merged.chores = merged.chores.map(c => ({
+      id: String(c.id),
+      name: String(c.name),
+      points: clampNumber(c.points, 0, 999999),
+      completed: Boolean(c.completed)
+    }));
+
+    merged.badges = merged.badges.map(b => ({
+      id: String(b.id),
+      name: String(b.name),
+      threshold: clampNumber(b.threshold, 0, 999999),
+      earned: Boolean(b.earned)
+    }));
+
+    merged.store = merged.store.map(s => ({
+      id: String(s.id),
+      name: String(s.name),
+      cost: clampNumber(s.cost, 0, 999999)
+    }));
+
+    merged.purchases = merged.purchases.map(p => ({
+      itemId: String(p.itemId),
+      name: String(p.name),
+      cost: clampNumber(p.cost, 0, 999999),
+      ts: clampNumber(p.ts, 0, 9999999999999)
+    }));
+
+    return merged;
+  } catch (e) {
+    console.warn("State load failed, using defaults.", e);
+    return structuredClone(DEFAULT_STATE);
+  }
+}
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function clampNumber(n, min, max) {
+  const x = Number(n);
+  if (Number.isNaN(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+function render() {
+  // Points
+  pointsTotalEl.textContent = state.points;
+  pointsBigEl.textContent = state.points;
+
+  // Checklist
+  choresListEl.innerHTML = "";
+  state.chores.forEach(chore => {
+    const row = document.createElement("div");
+    row.className = "row" + (chore.completed ? " completed" : "");
+    row.setAttribute("role", "button");
+    row.setAttribute("tabindex", "0");
+    row.title = "Tap to toggle";
+
+    const left = document.createElement("div");
+    left.className = "row-left";
+
+    const check = document.createElement("div");
+    check.className = "check";
+    check.textContent = chore.completed ? "✅" : "⬜️";
+
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = chore.name;
+
+    left.appendChild(check);
+    left.appendChild(name);
+
+    const pts = document.createElement("div");
+    pts.className = "points";
+    pts.textContent = `+${chore.points}`;
+
+    row.appendChild(left);
+    row.appendChild(pts);
+
+    row.addEventListener("click", () => toggleChore(chore.id));
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") toggleChore(chore.id);
+    });
+
+    choresListEl.appendChild(row);
+  });
+
+  // Routine blocks (reuse chores by ID)
+  renderRoutineBlock(routineMorningEl, state.routine.morning);
+  renderRoutineBlock(routineAfterSchoolEl, state.routine.afterSchool);
+  renderRoutineBlock(routineBedtimeEl, state.routine.bedtime);
+
+  // Badges
+  badgesGridEl.innerHTML = "";
+  state.badges.forEach(badge => {
+    const card = document.createElement("div");
+    card.className = "badge" + (badge.earned ? " earned" : "");
+
+    const top = document.createElement("div");
+    top.className = "badge-top";
+
+    const name = document.createElement("div");
+    name.className = "badge-name";
+    name.textContent = badge.earned ? `🏅 ${badge.name}` : `🔒 ${badge.name}`;
+
+    const thr = document.createElement("div");
+    thr.className = "badge-threshold";
+    thr.textContent = `${badge.threshold} pts`;
+
+    top.appendChild(name);
+    top.appendChild(thr);
+
+    const status = document.createElement("div");
+    status.className = "badge-status";
+    status.textContent = badge.earned ? "Earned!" : "Not yet";
+
+    card.appendChild(top);
+    card.appendChild(status);
+
+    badgesGridEl.appendChild(card);
+  });
+
+  // Store
+  storeGridEl.innerHTML = "";
+  state.store.forEach(item => {
+    const card = document.createElement("div");
+    card.className = "store-item";
+
+    const name = document.createElement("div");
+    name.className = "store-name";
+    name.textContent = item.name;
+
+    const cost = document.createElement("div");
+    cost.className = "store-cost";
+    cost.textContent = `Cost: ${item.cost} points`;
+
+    const actions = document.createElement("div");
+    actions.className = "store-actions";
+
+    const btn = document.createElement("button");
+    btn.className = "btn btn-primary";
+    btn.textContent = state.points >= item.cost ? "Buy" : "Need more points";
+    if (state.points < item.cost) {
+      btn.classList.add("btn-disabled");
+      btn.disabled = true;
+    } else {
+      btn.addEventListener("click", () => confirmBuy(item.id));
+    }
+
+    actions.appendChild(btn);
+
+    card.appendChild(name);
+    card.appendChild(cost);
+    card.appendChild(actions);
+
+    storeGridEl.appendChild(card);
+  });
+
+  // Purchases
+  purchaseListEl.innerHTML = "";
+  if (state.purchases.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "row";
+    empty.innerHTML = `<div class="row-left"><div class="check">🧾</div><div class="name">No purchases yet</div></div>
+                       <div class="points">—</div>`;
+    purchaseListEl.appendChild(empty);
+  } else {
+    // newest first
+    [...state.purchases].reverse().forEach(p => {
+      const row = document.createElement("div");
+      row.className = "row";
+
+      const left = document.createElement("div");
+      left.className = "row-left";
+
+      const icon = document.createElement("div");
+      icon.className = "check";
+      icon.textContent = "🛍️";
+
+      const name = document.createElement("div");
+      name.className = "name";
+      const d = new Date(p.ts);
+      name.textContent = `${p.name} (${d.toLocaleDateString()})`;
+
+      left.appendChild(icon);
+      left.appendChild(name);
+
+      const cost = document.createElement("div");
+      cost.className = "points";
+      cost.textContent = `-${p.cost}`;
+
+      row.appendChild(left);
+      row.appendChild(cost);
+
+      purchaseListEl.appendChild(row);
+    });
+  }
+}
+
+function renderRoutineBlock(containerEl, choreIds) {
+  containerEl.innerHTML = "";
+
+  choreIds.forEach(id => {
+    const chore = state.chores.find(c => c.id === id);
+    if (!chore) return;
+
+    const row = document.createElement("div");
+    row.className = "row" + (chore.completed ? " completed" : "");
+    row.setAttribute("role", "button");
+    row.setAttribute("tabindex", "0");
+
+    const left = document.createElement("div");
+    left.className = "row-left";
+
+    const check = document.createElement("div");
+    check.className = "check";
+    check.textContent = chore.completed ? "✅" : "⬜️";
+
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = chore.name;
+
+    left.appendChild(check);
+    left.appendChild(name);
+
+    const pts = document.createElement("div");
+    pts.className = "points";
+    pts.textContent = `+${chore.points}`;
+
+    row.appendChild(left);
+    row.appendChild(pts);
+
+    row.addEventListener("click", () => toggleChore(chore.id));
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") toggleChore(chore.id);
+    });
+
+    containerEl.appendChild(row);
+  });
+}
+
+function toggleChore(choreId) {
+  const chore = state.chores.find(c => c.id === choreId);
+  if (!chore) return;
+
+  // Toggle
+  chore.completed = !chore.completed;
+
+  if (chore.completed) {
+    state.points += chore.points;
+    showToast(`+${chore.points} points! ✅`);
+  } else {
+    state.points -= chore.points;
+    if (state.points < 0) state.points = 0;
+    showToast(`-${chore.points} points (unchecked)`);
+  }
+
+  // Update badges
+  checkBadges();
+
+  saveState();
+  render();
+}
+
+function checkBadges() {
+  state.badges.forEach(b => {
+    if (!b.earned && state.points >= b.threshold) {
+      b.earned = true;
+      showToast(`🏅 Badge earned: ${b.name}!`);
+    }
+  });
+}
+
+function confirmBuy(itemId) {
+  const item = state.store.find(s => s.id === itemId);
+  if (!item) return;
+
+  openModal(
+    "Confirm Purchase",
+    `Spend ${item.cost} points on "${item.name}"?`,
+    () => buyItem(itemId)
+  );
+}
+
+function buyItem(itemId) {
+  const item = state.store.find(s => s.id === itemId);
+  if (!item) return;
+
+  if (state.points < item.cost) {
+    showToast("Not enough points!");
+    return;
+  }
+
+  state.points -= item.cost;
+  state.purchases.push({
+    itemId: item.id,
+    name: item.name,
+    cost: item.cost,
+    ts: Date.now()
+  });
+
+  saveState();
+  render();
+  showToast(`🛍️ Bought: ${item.name}!`);
+}
+
+function resetDaily() {
+  // Reset chores only (keep points, badges, purchases)
+  state.chores.forEach(c => (c.completed = false));
+  saveState();
+  render();
+  showToast("Reset done. Tomorrow is a new mission! ↻");
+}
+
+function wireNavButtons() {
+  const navButtons = document.querySelectorAll("[data-view]");
+  navButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const view = btn.getAttribute("data-view");
+      showView(view);
+    });
+  });
+}
+
+function showView(viewName) {
+  // Hide all
+  [viewChecklist, viewTodo, viewPoints, viewStore].forEach(v => v.classList.add("hidden"));
+
+  // Show selected
+  if (viewName === "checklist") viewChecklist.classList.remove("hidden");
+  if (viewName === "todo") viewTodo.classList.remove("hidden");
+  if (viewName === "points") viewPoints.classList.remove("hidden");
+  if (viewName === "store") viewStore.classList.remove("hidden");
+
+  // Scroll into view for nicer UX
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function wireResetButton() {
+  resetDailyBtn.addEventListener("click", () => {
+    openModal(
+      "Reset for Tomorrow",
+      "This will uncheck all chores. Points and badges stay the same. Do it?",
+      resetDaily
+    );
+  });
+}
+
+// Toast helper
+let toastTimer = null;
+function showToast(message) {
+  toastEl.textContent = message;
+  toastEl.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastEl.classList.add("hidden");
+  }, 1800);
+}
+
+// Modal helpers
+function wireModalButtons() {
+  modalCancel.addEventListener("click", closeModal);
+  modalBackdrop.addEventListener("click", (e) => {
+    if (e.target === modalBackdrop) closeModal();
+  });
+  modalConfirm.addEventListener("click", () => {
+    if (typeof modalAction === "function") modalAction();
+    closeModal();
+  });
+}
+
+function openModal(title, body, onConfirm) {
+  modalTitle.textContent = title;
+  modalBody.textContent = body;
+  modalAction = onConfirm;
+  modalBackdrop.classList.remove("hidden");
+}
+
+function closeModal() {
+  modalAction = null;
+  modalBackdrop.classList.add("hidden");
+}
+
+
+⸻
+
+Replit setup (fast)
+	1.	In Replit: Create Repl → HTML, CSS, JS
+	2.	Replace the contents of:
+	•	index.html
+	•	style.css
+	•	script.js
+	3.	Click Run
+	4.	Test:
+	•	Check chores → points go up
+	•	Go to Store → buy something → points go down
+	•	Refresh the page → progress stays (localStorage)
+
+⸻
+
+Next “kid-wow” upgrade (tell me which you want)
+
+Pick one and I’ll add it cleanly:
+	1.	Editable chores (add/remove chores in-app)
+	2.	Character leveling (points = level + new character)
+	3.	Parent approval switch for purchases
+	4.	Two profiles (Fitz/Merckx)
+
+Say “Add #2” (or whatever) and I’ll extend the code.

@@ -1,0 +1,244 @@
+Chore Helper — MVP Technical Spec (Replit Web App)
+
+1) Goal
+Build a simple “real life helper” app for a 6- and 8-year-old that:
+	•	makes chores feel like a game
+	•	uses checklists + points
+	•	unlocks badges
+	•	includes a simple store where points can be spent
+
+MVP should be fun in under 60 seconds after opening.
+
+⸻
+
+2) MVP Scope (What we will build first)
+
+Core Features (MVP)
+	1.	Checklist (Chores)
+	•	Show a list of chores (predefined)
+	•	Each chore has a point value
+	•	Tap a chore to mark complete / incomplete
+	2.	Points
+	•	Completing chores adds points
+	•	Unchecking removes points (simple anti-cheat for now)
+	3.	Badges
+	•	Earn badges at point thresholds (ex: 50, 150, 300)
+	4.	Store
+	•	List of rewards (“Arcade”, “Food Treat”, “Build a House”, etc.)
+	•	Each reward costs points
+	•	User can “buy” rewards, which subtract points and log purchases
+	5.	Persistence
+	•	Save points, completed chores, badges earned, and purchases in localStorage
+	•	No login, no backend
+
+⸻
+
+3) Non-Goals (Not in MVP)
+	•	Photo verification (camera)
+	•	Multiple users / profiles
+	•	Scheduling engine / calendar integrations
+	•	Homework per-page scoring logic
+	•	Parent/admin panel
+	•	Real-world payment or approvals (we can add “parent approve” later)
+
+⸻
+
+4) User Experience (Screens + Navigation)
+
+Screen A: Home
+
+Three giant buttons (primary nav):
+	•	My Checklist
+	•	To Do
+	•	Points
+
+Also show:
+	•	current points (big number)
+	•	character image/emoji (static for MVP)
+	•	“Badge earned!” toast when a badge unlocks
+
+Navigation behavior
+	•	Buttons switch visible sections (single-page app style)
+
+⸻
+
+Screen B: My Checklist (Main Chores List)
+
+Components
+	•	List of chores with:
+	•	name
+	•	point value
+	•	checkbox / big tap area
+	•	“Reset for Tomorrow” button (optional for MVP, recommended)
+
+Chore examples (MVP defaults)
+	•	Make bed — 10
+	•	Put clothes in hamper — 10
+	•	Clean room (quick) — 30
+	•	Clean room (deep) — 100
+	•	Dishes helper — 25
+	•	Feed pet — 15
+	•	Homework (done) — 50 (placeholder)
+	•	Pick up toys — 15
+
+⸻
+
+Screen C: To Do (Daily Routine)
+
+This is the “simple routine list” without scheduling complexity.
+	•	“Today’s Missions” (same list as chores, or a smaller subset)
+	•	Optional “3-step routine” blocks:
+	•	Morning
+	•	After School
+	•	Bedtime
+Each block is just a short checklist (no times).
+
+(MVP can reuse the same chores list to avoid extra complexity.)
+
+⸻
+
+Screen D: Points
+
+Components
+	•	Big Points Total
+	•	Badges area (“locked” vs “earned”)
+	•	Purchase history (“You bought: Arcade”)
+
+⸻
+
+Screen E: Store
+
+Components
+	•	Reward cards:
+	•	Reward name
+	•	Cost in points
+	•	“Buy” button (disabled if not enough points)
+	•	Confirmation modal: “Spend 100 points on Arcade?”
+
+Reward examples
+	•	Arcade — 200
+	•	Treat/Food — 75
+	•	Build a House (creative time) — 120
+	•	Pick a family game — 60
+
+⸻
+
+5) Data Model (In-code JSON)
+
+Chore object
+
+{
+  id: "make_bed",
+  name: "Make bed",
+  points: 10,
+  completed: false
+}
+
+Badge object
+
+{
+  id: "badge_50",
+  name: "Starter Badge",
+  threshold: 50,
+  earned: false
+}
+
+Store item object
+
+{
+  id: "arcade",
+  name: "Arcade",
+  cost: 200
+}
+
+App State (saved to localStorage)
+
+{
+  points: 120,
+  chores: [ ... ],
+  badges: [ ... ],
+  purchases: [
+    { itemId: "treat", name: "Treat/Food", cost: 75, ts: 1700000000000 }
+  ]
+}
+
+
+⸻
+
+6) Points + Badge Rules (MVP Logic)
+
+Points
+	•	When a chore becomes completed: points += chore.points
+	•	When chore is unchecked: points -= chore.points (floor at 0)
+
+Badge thresholds (example)
+	•	50 points → “Starter Badge”
+	•	150 points → “Helper Level 2”
+	•	300 points → “Chore Master”
+
+Badge evaluation
+	•	After any point change, loop through badges:
+	•	if points >= threshold and not earned → mark earned + show toast
+
+⸻
+
+7) Technical Implementation (Replit)
+
+Stack
+	•	Single-page static web app
+	•	index.html + style.css + script.js
+	•	No frameworks (keep it kid-readable)
+
+Folder structure
+
+/
+  index.html
+  style.css
+  script.js
+
+Core functions (script.js)
+	•	loadState() → read localStorage or create default state
+	•	saveState(state) → write localStorage
+	•	render() → redraw UI sections based on state
+	•	toggleChore(choreId) → update completed + points + badges + save + render
+	•	buyItem(itemId) → validate points, subtract, log purchase, save + render
+	•	resetDaily() → set all chores to incomplete (optional MVP)
+
+Persistence
+	•	localStorage.setItem("choreHelperState", JSON.stringify(state))
+
+⸻
+
+8) UI Design Rules (Kid-first)
+	•	Huge buttons (minimum 48px height)
+	•	Big fonts
+	•	Minimal text
+	•	Emoji support 😄✅⭐️🏆
+	•	Sound effects optional later (MVP can skip)
+
+⸻
+
+9) Acceptance Criteria (Definition of Done)
+
+MVP is “done” when:
+	•	App runs in Replit and loads instantly
+	•	Kid can:
+	•	check a chore
+	•	see points go up
+	•	unlock at least one badge
+	•	buy at least one store item
+	•	refresh page and everything is still saved
+
+⸻
+
+10) Next Iteration Backlog (after MVP)
+	•	Photo verification
+	•	Homework “points per page” input
+	•	Daily streak tracking
+	•	Parent approval on purchases
+	•	Two profiles (Fitz/Merckx)
+	•	Schedule reminders (simple local notifications, if later moved to mobile)
+
+⸻
+
+If you want, I can now generate the actual Replit-ready code (HTML/CSS/JS) exactly matching this spec so you can paste it in and run it immediately.
