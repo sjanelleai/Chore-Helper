@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import bcrypt from "bcryptjs";
 
 export default function SelectChild() {
-  const { children, family, signOut, selectChild, refreshChildren } = useAuth();
+  const { children, family, signOut, selectChild, refreshChildren, refreshFamily } = useAuth();
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
@@ -74,7 +74,8 @@ export default function SelectChild() {
     e.preventDefault();
     if (!newChildName.trim()) return;
     if (!family) {
-      toast({ title: "Error", description: "Family data not loaded. Please sign out and sign in again.", variant: "destructive" });
+      toast({ title: "Loading...", description: "Family data is still loading. Please wait a moment and try again." });
+      refreshFamily();
       return;
     }
 

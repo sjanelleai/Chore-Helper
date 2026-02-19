@@ -43,39 +43,46 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
   );
   const [loading, setLoading] = useState(true);
 
-  const loadFamilyData = useCallback(async (userId: string) => {
-    const { data: profile, error: pErr } = await supabase
-      .from("parent_profiles")
-      .select("family_id, parent_display_name")
-      .eq("user_id", userId)
-      .single();
+  const loadFamilyData = useCallback(async (userId: string, retries = 5) => {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const { data: profile, error: pErr } = await supabase
+        .from("parent_profiles")
+        .select("family_id, parent_display_name")
+        .eq("user_id", userId)
+        .single();
 
-    if (pErr || !profile) {
-      setFamily(null);
-      setChildrenList([]);
+      if (pErr || !profile) {
+        if (attempt < retries) {
+          await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
+          continue;
+        }
+        setFamily(null);
+        setChildrenList([]);
+        return;
+      }
+
+      setFamily({
+        familyId: profile.family_id,
+        parentDisplayName: profile.parent_display_name || "Parent",
+      });
+
+      const { data: kids } = await supabase
+        .from("children")
+        .select("id, name, avatar, pin_hash")
+        .eq("family_id", profile.family_id)
+        .order("created_at", { ascending: true });
+
+      if (kids) {
+        setChildrenList(
+          kids.map((k: any) => ({
+            id: k.id,
+            name: k.name,
+            avatar: k.avatar,
+            hasPin: !!k.pin_hash,
+          }))
+        );
+      }
       return;
-    }
-
-    setFamily({
-      familyId: profile.family_id,
-      parentDisplayName: profile.parent_display_name || "Parent",
-    });
-
-    const { data: kids } = await supabase
-      .from("children")
-      .select("id, name, avatar, pin_hash")
-      .eq("family_id", profile.family_id)
-      .order("created_at", { ascending: true });
-
-    if (kids) {
-      setChildrenList(
-        kids.map((k: any) => ({
-          id: k.id,
-          name: k.name,
-          avatar: k.avatar,
-          hasPin: !!k.pin_hash,
-        }))
-      );
     }
   }, []);
 
