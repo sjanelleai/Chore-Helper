@@ -34,7 +34,7 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `parent_profiles` - Links Supabase Auth users to families
 - `children` - Child profiles per family (name, avatar, optional pin_hash)
 - `child_points` - Running point totals per child (points, lifetime_points)
-- `family_config` - Per-family catalog settings (enabled items, custom points/costs, allowance settings)
+- `family_config` - Per-family catalog settings (enabled items, custom points/costs, allowance settings, parent_email, secondary_parent_email)
 - `daily_status` - Per-child per-day chore completion tracking (JSONB completed_chores map)
 - `ledger_events` - Point audit trail (chore_completed, chore_unchecked, bonus_award, purchase)
 - `purchases` - Reward redemption history
@@ -58,6 +58,15 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `create_child(p_name, p_avatar, p_pin)` - Creates child + child_points row
 - `verify_child_pin(p_child_id, p_pin)` - PIN verification for child login
 - `increment_child_points(p_child_id, p_delta, p_add_lifetime)` - Atomic point updates
+
+## Daily Summary Email System
+- Frontend computes family-wide summary (all children) using Supabase queries
+- Summary data + recipient emails POSTed to Express backend `/api/summary/send`
+- Backend formats HTML email and sends via SendGrid to all configured parent emails
+- Supports primary + secondary parent email (both stored in family_config)
+- Email shows per-child breakdown: completed/missed chores, bonuses, purchases, points, balance
+- "Send Summary Email" button in Parent Panel triggers manual send
+- Schema change required: `ALTER TABLE family_config ADD COLUMN IF NOT EXISTS secondary_parent_email text;`
 
 ## User Preferences
 - Kid-friendly, gamified UI with fun fonts and bright colors

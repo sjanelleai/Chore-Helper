@@ -1,0 +1,256 @@
+Below is a technical document for implementing Option A (Supabase Edge Functions + Scheduler) with a neatly formatted nightly email (formatting handled later via SendGrid templates—you said you’ll request that later). This doc covers:
+	•	✅ What to build in Replit (parent portal feature: choose daily summary time)
+	•	✅ What to build in Supabase (tables, RLS, Edge Function, scheduled job)
+	•	✅ How to test end-to-end before scheduling
+	•	✅ How to schedule to run at each parent’s requested time
+
+I’ll also call out anything you’d need outside Replit/Supabase at the end (spoiler: not much).
+
+⸻
+
+Chore Helper – Nightly Parent Summary Emails
+
+Architecture: Supabase DB + Supabase Edge Functions + Supabase Scheduler
+
+Goal
+
+Send each parent a daily summary email at their chosen time, based on that family’s chore activity (chores completed/missed, points, badges earned, rewards redeemed). Email should be cleanly formatted (we’ll wire SendGrid later).
+
+⸻
+
+1) Data Requirements and Assumptions
+
+Data we’ll summarize (any of these that exist)
+	•	Daily chores completed/missed (by child)
+	•	Points earned/spent
+	•	Badges earned
+	•	Rewards redeemed
+	•	Bonus points awarded
+
+Assumption: You already store activity in a “ledger/events” table (or equivalent). If not, we can still do it off your current state tables, but it’s much less reliable for daily summaries. The job should ideally read from an append-only event log.
+
+⸻
+
+2) Database Changes (Supabase)
+
+2.1 Family notification settings table
+
+Create one row per family (or parent profile) that controls email + schedule.
+
+Table: family_notification_settings
+	•	family_id (uuid, PK, references families)
+	•	enabled (boolean)
+	•	parent_email (text) – where the summary goes
+	•	summary_time_local (text) – "HH:MM" (e.g., "19:30")
+	•	timezone (text) – IANA zone (e.g., "America/Denver")
+	•	last_sent_date (date, nullable) – the date (in that timezone) last sent
+	•	created_at, updated_at
+
+Why store HH:MM + timezone?
+It’s easiest for a parent-facing “pick time” UX and avoids DST headaches when combined with timezone.
+
+2.2 Email send log (prevents duplicates + aids debugging)
+
+Table: email_send_log
+	•	id uuid PK
+	•	family_id uuid
+	•	date_key date (the “day being summarized” in the family’s timezone)
+	•	status text ("sent" | "failed" | "skipped")
+	•	to_email text
+	•	provider_message_id text (later, for SendGrid)
+	•	error text
+	•	created_at timestamptz
+
+Create a unique constraint:
+	•	(family_id, date_key) unique
+This guarantees “only one summary per family per day”.
+
+2.3 (Optional but recommended) Store parent email in settings only
+
+Even if parent email exists in a broader profile table, keep the “notification email” here so parents can change it without affecting auth.
+
+⸻
+
+3) RLS and Security Model
+
+3.1 RLS expectations
+	•	Parents can read/write their own family_notification_settings.
+	•	The Edge Function will run with a service role key (bypasses RLS) to send emails.
+
+3.2 RLS policy example (high level)
+
+For family_notification_settings:
+	•	allow select/update/insert only when family_id matches the parent’s family.
+
+For email_send_log:
+	•	parents can select their own logs (optional), but inserts are done by function.
+
+⸻
+
+4) Replit App Changes (Parent Portal)
+
+4.1 Add “Daily Summary Emails” settings UI
+
+In your existing parent portal, add:
+	•	Toggle: Enable Daily Summary
+	•	Input: Email address to receive summary
+	•	Time picker: Daily summary time
+	•	Dropdown: Timezone (default to parent’s local or "America/Denver")
+	•	Button: Send Test Summary Now
+	•	Button: Save
+
+UX notes
+	•	Save should persist to family_notification_settings
+	•	Show next scheduled run: “Next email will send around 7:30 PM (America/Denver)”
+
+4.2 API calls from the app (Supabase client)
+	•	upsert settings row for the current family
+	•	Send Test Summary Now calls an Edge Function endpoint (details below) with:
+	•	family_id (or infer it server-side from parent session, your choice)
+	•	mode: "test"
+
+⸻
+
+5) Supabase Edge Function Design
+
+5.1 Function: send-daily-summaries
+
+This function will:
+	1.	Find all families with summaries enabled.
+	2.	Determine which families are “due” right now based on summary_time_local + timezone.
+	3.	For each due family:
+	•	compute the correct date_key (the day to summarize)
+	•	check email_send_log to prevent duplicates
+	•	fetch activity for that day
+	•	generate a clean subject + HTML/text body (AI formatting later; for now deterministic)
+	•	send email (stub now; later SendGrid)
+	•	log success/failure
+
+5.2 Scheduling strategy (important)
+
+Supabase scheduled triggers run on a fixed schedule (like cron). Parents want different times.
+
+Solution: Run the job frequently (e.g., every 15 minutes) and only send emails for families whose local time falls within the current window.
+
+Example:
+	•	Scheduler triggers function every 15 minutes
+	•	Function calculates “is now within [summary_time_local, summary_time_local + 15min) in that timezone?”
+	•	If yes and not already sent for that date → send
+
+This is simple, robust, and scales.
+
+5.3 Handling “what day are we summarizing?”
+
+Common approach:
+	•	At the chosen time (e.g. 7:30 PM), summarize today so far.
+	•	Or summarize yesterday at morning times.
+
+Pick one consistent rule. Recommended for parenting:
+Summarize “today” at the selected time, so it’s actionable and current.
+
+So if it’s 7:30 PM local:
+	•	date_key = local date “today”
+	•	window = start of day → now (or end of day if you trigger late)
+
+We can also add an option later: “summarize yesterday instead.”
+
+⸻
+
+6) Email Content Format (No SendGrid yet)
+
+Even before SendGrid, output should be clean.
+
+6.1 Suggested email structure (HTML + text fallback)
+
+Subject:
+Chore Helper Summary — Tue, Feb 19
+
+Body sections:
+	•	Header: App name + date + child(ren)
+	•	For each child:
+	•	Points earned today
+	•	Completed chores list
+	•	Missed chores list
+	•	Badges earned
+	•	Rewards redeemed
+	•	Bonus points
+	•	Footer: “Manage your settings” link back to parent portal
+
+We’ll later swap HTML rendering into a SendGrid dynamic template, but the data model should already be “template-ready.”
+
+⸻
+
+7) Testing Plan (Before Scheduling)
+
+7.1 Add a manual “test mode”
+
+Edge Function accepts:
+	•	mode: "test"
+	•	family_id (optional if inferred)
+	•	date_key override (optional)
+
+Test mode behavior:
+	•	Sends immediately regardless of time window
+	•	Logs email_send_log but marks as "sent" with status_detail="test" (or store in error column)
+
+7.2 End-to-end test steps
+	1.	In parent portal, enable summary, set email + time + timezone, save.
+	2.	Click “Send Test Summary Now”.
+	3.	Confirm the function ran (Supabase Function Logs).
+	4.	Confirm email_send_log has a row for that family/date.
+	5.	Confirm email body structure looks correct (even if email sending is stubbed at first).
+
+⸻
+
+8) Scheduling (Supabase)
+
+8.1 Create a Scheduled Trigger
+
+In Supabase, configure a cron schedule to invoke the Edge Function:
+	•	Frequency: every 15 minutes (or every 10)
+	•	Endpoint: send-daily-summaries
+
+8.2 Safety rules
+	•	Do not send if:
+	•	enabled=false
+	•	parent_email missing
+	•	already sent today (unique constraint + check)
+	•	If it fails sending:
+	•	log failed with error
+	•	optionally retry next run (but avoid spam by limiting retries)
+
+⸻
+
+9) What you need to set up outside Replit/Supabase
+
+For the version you requested (documenting only what you need inside Replit/Supabase):
+
+✅ Nothing else is required to build and schedule the workflow.
+Supabase Edge Functions + Scheduler covers execution.
+
+(When you add SendGrid later, you’ll add SMTP/API credentials as secrets and a template in SendGrid—but you said you’ll request that separately.)
+
+⸻
+
+10) Developer Acceptance Criteria
+
+This feature is complete when:
+	1.	Parent can set:
+	•	email
+	•	enabled toggle
+	•	daily time
+	•	timezone
+	2.	Settings persist in Supabase per family
+	3.	“Send Test Summary Now” works and logs a send attempt
+	4.	Scheduled job runs every 15 minutes and sends at the correct local time
+	5.	Duplicate protection works (no double sends per day)
+
+⸻
+
+Quick question (only if you want me to tailor the “due window” logic)
+
+At the selected time, do you want the email to summarize:
+	•	Today so far (recommended), or
+	•	Yesterday (classic daily digest style)?
+
+If you don’t answer, I’d implement today so far because it matches how parents use it.

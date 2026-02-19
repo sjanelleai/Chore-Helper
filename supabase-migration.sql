@@ -324,5 +324,12 @@ end;
 $$;
 
 -- ============================================================
+-- 7) Schema Updates – Secondary Parent Email
+-- ============================================================
+-- Run this in Supabase SQL Editor if the column does not exist yet:
+
+ALTER TABLE family_config ADD COLUMN IF NOT EXISTS secondary_parent_email text;
+
+-- ============================================================
 -- Done! Your Supabase database is ready for HomeQuest.
 -- ============================================================

@@ -338,20 +338,23 @@ function SettingsSection() {
   const { data: userState } = useUserState();
   const updateSettings = useUpdateSettings();
   const [email, setEmail] = useState("");
+  const [secondaryEmail, setSecondaryEmail] = useState("");
   const [allowance, setAllowance] = useState(false);
   const [pointsPerDollar, setPointsPerDollar] = useState(600);
 
   useEffect(() => {
     if (userState) {
       setEmail(userState.parentEmail || "");
+      setSecondaryEmail(userState.secondaryParentEmail || "");
       setAllowance(userState.allowanceEnabled);
       setPointsPerDollar(userState.pointsPerDollar);
     }
-  }, [userState?.parentEmail, userState?.allowanceEnabled, userState?.pointsPerDollar]);
+  }, [userState?.parentEmail, userState?.secondaryParentEmail, userState?.allowanceEnabled, userState?.pointsPerDollar]);
 
   const handleSave = () => {
     updateSettings.mutate({
       parentEmail: email || null,
+      secondaryParentEmail: secondaryEmail || null,
       allowanceEnabled: allowance,
       pointsPerDollar,
     });
@@ -366,7 +369,8 @@ function SettingsSection() {
 
       <div className="space-y-4">
         <div>
-          <label className="text-sm font-bold text-muted-foreground mb-1 block">Parent Email (for daily summaries)</label>
+          <label className="text-sm font-bold text-muted-foreground mb-1 block">Primary Parent Email</label>
+          <p className="text-xs text-muted-foreground mb-2">Receives daily summary emails</p>
           <input
             type="email"
             value={email}
@@ -374,6 +378,19 @@ function SettingsSection() {
             placeholder="parent@example.com"
             className="w-full p-3 rounded-xl border bg-background text-foreground"
             data-testid="input-parent-email"
+          />
+        </div>
+
+        <div>
+          <label className="text-sm font-bold text-muted-foreground mb-1 block">Secondary Parent Email</label>
+          <p className="text-xs text-muted-foreground mb-2">Optional - also receives daily summaries</p>
+          <input
+            type="email"
+            value={secondaryEmail}
+            onChange={(e) => setSecondaryEmail(e.target.value)}
+            placeholder="other-parent@example.com"
+            className="w-full p-3 rounded-xl border bg-background text-foreground"
+            data-testid="input-secondary-parent-email"
           />
         </div>
 
@@ -434,6 +451,9 @@ function SummarySection() {
   const sendEmail = useSendSummaryEmail();
   const { data: userState } = useUserState();
 
+  const hasAnyEmail = !!(userState?.parentEmail || userState?.secondaryParentEmail);
+  const emailCount = [userState?.parentEmail, userState?.secondaryParentEmail].filter(Boolean).length;
+
   return (
     <Card className="p-5">
       <h3 className="font-display font-bold text-lg mb-4 flex items-center gap-2">
@@ -445,45 +465,80 @@ function SummarySection() {
         <div className="text-center py-8 text-muted-foreground">Loading...</div>
       ) : summary ? (
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div className="bg-green-50 dark:bg-green-900/20 p-3 rounded-xl text-center">
               <p className="text-xs font-bold text-green-700 dark:text-green-400">Completed</p>
-              <p className="text-2xl font-black text-green-600 dark:text-green-300" data-testid="text-completed-count">{summary.completedChores.length}</p>
+              <p className="text-2xl font-black text-green-600 dark:text-green-300" data-testid="text-completed-count">{summary.totalChoresCompleted}</p>
             </div>
             <div className="bg-red-50 dark:bg-red-900/20 p-3 rounded-xl text-center">
-              <p className="text-xs font-bold text-red-700 dark:text-red-400">Missed</p>
-              <p className="text-2xl font-black text-red-600 dark:text-red-300" data-testid="text-missed-count">{summary.missedChores.length}</p>
+              <p className="text-xs font-bold text-red-700 dark:text-red-400">Remaining</p>
+              <p className="text-2xl font-black text-red-600 dark:text-red-300" data-testid="text-missed-count">{summary.totalChoresMissed}</p>
+            </div>
+            <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl text-center">
+              <p className="text-xs font-bold text-blue-700 dark:text-blue-400">Points</p>
+              <p className="text-2xl font-black text-blue-600 dark:text-blue-300" data-testid="text-points-today">
+                {summary.totalPointsEarned > 0 ? "+" : ""}{summary.totalPointsEarned}
+              </p>
             </div>
           </div>
 
-          <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl flex items-center justify-between gap-2">
-            <span className="text-sm font-bold text-blue-700 dark:text-blue-300">Points Today</span>
-            <span className="font-mono font-black text-lg text-blue-600 dark:text-blue-300" data-testid="text-points-today">
-              {summary.pointsEarnedToday > 0 ? "+" : ""}{summary.pointsEarnedToday}
-            </span>
-          </div>
-
-          {summary.bonuses.length > 0 && (
-            <div className="text-sm">
-              <p className="font-bold text-muted-foreground mb-1">Bonuses:</p>
-              {summary.bonuses.map((b: any, i: number) => (
-                <p key={i} className="text-foreground">+{b.points} - {b.reason} {b.note ? `(${b.note})` : ""}</p>
-              ))}
+          {summary.children.map((child, i) => (
+            <div key={i} className="border rounded-xl p-3 space-y-2">
+              <p className="font-bold text-foreground" data-testid={`text-summary-child-${i}`}>{child.childName}</p>
+              <div className="flex items-center gap-3 text-sm flex-wrap">
+                <span className="text-green-600 dark:text-green-400 font-medium">
+                  {child.completedChores.length} done
+                </span>
+                <span className="text-red-500 dark:text-red-400 font-medium">
+                  {child.missedChores.length} remaining
+                </span>
+                <span className="text-blue-600 dark:text-blue-400 font-mono font-bold">
+                  {child.pointsEarnedToday > 0 ? "+" : ""}{child.pointsEarnedToday} pts
+                </span>
+                <span className="text-muted-foreground font-mono">
+                  Balance: {child.currentBalance}
+                </span>
+              </div>
+              {child.completedChores.length > 0 && (
+                <div className="text-xs text-muted-foreground">
+                  {child.completedChores.join(", ")}
+                </div>
+              )}
+              {child.bonuses.length > 0 && (
+                <div className="text-xs text-blue-600 dark:text-blue-400">
+                  {child.bonuses.map((b, j) => (
+                    <span key={j}>+{b.points} bonus ({b.reason}){j < child.bonuses.length - 1 ? ", " : ""}</span>
+                  ))}
+                </div>
+              )}
+              {child.redemptions.length > 0 && (
+                <div className="text-xs text-purple-600 dark:text-purple-400">
+                  {child.redemptions.map((r, j) => (
+                    <span key={j}>-{r.cost} pts ({r.name}){j < child.redemptions.length - 1 ? ", " : ""}</span>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+          ))}
 
           <Button
-            onClick={() => sendEmail.mutate()}
-            disabled={sendEmail.isPending || !userState?.parentEmail}
+            onClick={() => summary && sendEmail.mutate(summary)}
+            disabled={sendEmail.isPending || !hasAnyEmail}
             variant="outline"
             className="w-full"
             data-testid="button-send-summary-email"
           >
             {sendEmail.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            {userState?.parentEmail ? "Send Summary Email" : "Set email in settings first"}
+            {hasAnyEmail
+              ? `Send Summary Email${emailCount > 1 ? ` (${emailCount} recipients)` : ""}`
+              : "Set email in settings first"}
           </Button>
         </div>
-      ) : null}
+      ) : (
+        <p className="text-sm text-muted-foreground text-center py-4">
+          Add children to see the daily summary
+        </p>
+      )}
     </Card>
   );
 }

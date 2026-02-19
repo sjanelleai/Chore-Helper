@@ -41,6 +41,7 @@ export function useFamilyConfig() {
         allowance_enabled: boolean;
         points_per_dollar: number;
         parent_email: string | null;
+        secondary_parent_email: string | null;
       };
     },
   });
@@ -375,6 +376,7 @@ export function useUserState() {
     totalPoints: pts.points,
     totalEarnedLifetime: pts.lifetime_points,
     parentEmail: config.parent_email,
+    secondaryParentEmail: config.secondary_parent_email,
     allowanceEnabled: config.allowance_enabled,
     pointsPerDollar: config.points_per_dollar,
   } : undefined;
@@ -467,11 +469,12 @@ export function useUpdateSettings() {
   const { family } = useAuth();
 
   return useMutation({
-    mutationFn: async (settings: { parentEmail?: string | null; allowanceEnabled?: boolean; pointsPerDollar?: number }) => {
+    mutationFn: async (settings: { parentEmail?: string | null; secondaryParentEmail?: string | null; allowanceEnabled?: boolean; pointsPerDollar?: number }) => {
       if (!family) throw new Error("No family");
 
       const updateData: any = {};
       if (settings.parentEmail !== undefined) updateData.parent_email = settings.parentEmail;
+      if (settings.secondaryParentEmail !== undefined) updateData.secondary_parent_email = settings.secondaryParentEmail;
       if (settings.allowanceEnabled !== undefined) updateData.allowance_enabled = settings.allowanceEnabled;
       if (settings.pointsPerDollar !== undefined) updateData.points_per_dollar = settings.pointsPerDollar;
       updateData.updated_at = new Date().toISOString();
@@ -656,75 +659,142 @@ export function useLedger() {
 
 // --- Summary ---
 
-export function useDailySummary(date?: string) {
-  const { activeChildId } = useAuth();
+export interface ChildDailySummary {
+  childName: string;
+  completedChores: string[];
+  missedChores: string[];
+  bonuses: { reason: string; points: number; note: string | null }[];
+  redemptions: { name: string; cost: number }[];
+  pointsEarnedToday: number;
+  currentBalance: number;
+}
+
+export interface FamilySummary {
+  date: string;
+  familyName: string;
+  children: ChildDailySummary[];
+  totalPointsEarned: number;
+  totalChoresCompleted: number;
+  totalChoresMissed: number;
+}
+
+export function useFamilySummary(date?: string) {
+  const { family, children: kids } = useAuth();
   const { data: config } = useFamilyConfig();
 
-  return useQuery({
-    queryKey: ["summary", activeChildId, date],
-    enabled: !!activeChildId && !!config,
+  return useQuery<FamilySummary | null>({
+    queryKey: ["family_summary", family?.familyId, date],
+    enabled: !!family && !!config && kids.length > 0,
     queryFn: async () => {
-      if (!activeChildId || !config) return null;
+      if (!family || !config || kids.length === 0) return null;
 
       const today = date || localDateKey(new Date());
-
       const startOfDay = `${today}T00:00:00.000Z`;
       const endOfDay = `${today}T23:59:59.999Z`;
 
-      const { data: events } = await supabase
-        .from("ledger_events")
-        .select("*")
-        .eq("child_id", activeChildId)
-        .gte("occurred_at", startOfDay)
-        .lte("occurred_at", endOfDay)
-        .order("occurred_at");
-
-      const { data: dailyData } = await supabase
-        .from("daily_status")
-        .select("completed_chores")
-        .eq("child_id", activeChildId)
-        .eq("date_key", today)
-        .single();
-
-      const completedMap = (dailyData?.completed_chores as Record<string, boolean>) || {};
       const enabledMap = (config.enabled_chores as Record<string, boolean>) || {};
       const allChores = flattenCatalog(CATALOG.chores);
 
-      const completedChores: string[] = [];
-      const missedChores: string[] = [];
-      allChores.forEach(c => {
-        if (!enabledMap[c.id]) return;
-        if (completedMap[c.id]) {
-          completedChores.push(c.name);
-        } else {
-          missedChores.push(c.name);
-        }
-      });
+      const childSummaries: ChildDailySummary[] = [];
 
-      const eventsArr = events || [];
-      const bonuses = eventsArr
-        .filter((e: any) => e.type === "bonus_award")
-        .map((e: any) => ({ reason: e.ref_id, points: e.points_delta, note: e.note }));
+      for (const kid of kids) {
+        const [eventsRes, dailyRes, pointsRes, purchasesRes] = await Promise.all([
+          supabase
+            .from("ledger_events")
+            .select("*")
+            .eq("child_id", kid.id)
+            .gte("occurred_at", startOfDay)
+            .lte("occurred_at", endOfDay)
+            .order("occurred_at"),
+          supabase
+            .from("daily_status")
+            .select("completed_chores")
+            .eq("child_id", kid.id)
+            .eq("date_key", today)
+            .single(),
+          supabase
+            .from("child_points")
+            .select("points")
+            .eq("child_id", kid.id)
+            .single(),
+          supabase
+            .from("purchases")
+            .select("reward_name, cost")
+            .eq("child_id", kid.id)
+            .gte("purchased_at", startOfDay)
+            .lte("purchased_at", endOfDay),
+        ]);
 
-      const pointsEarnedToday = eventsArr.reduce((sum: number, e: any) => sum + e.points_delta, 0);
+        const completedMap = (dailyRes.data?.completed_chores as Record<string, boolean>) || {};
+        const completedChores: string[] = [];
+        const missedChores: string[] = [];
+        allChores.forEach(c => {
+          if (!enabledMap[c.id]) return;
+          if (completedMap[c.id]) {
+            completedChores.push(c.name);
+          } else {
+            missedChores.push(c.name);
+          }
+        });
+
+        const eventsArr = eventsRes.data || [];
+        const bonuses = eventsArr
+          .filter((e: any) => e.type === "bonus_award")
+          .map((e: any) => ({ reason: e.ref_id, points: e.points_delta, note: e.note }));
+
+        const redemptions = (purchasesRes.data || []).map((p: any) => ({
+          name: p.reward_name,
+          cost: p.cost,
+        }));
+
+        const pointsEarnedToday = eventsArr.reduce((sum: number, e: any) => sum + e.points_delta, 0);
+
+        childSummaries.push({
+          childName: kid.name,
+          completedChores,
+          missedChores,
+          bonuses,
+          redemptions,
+          pointsEarnedToday,
+          currentBalance: pointsRes.data?.points || 0,
+        });
+      }
 
       return {
         date: today,
-        completedChores,
-        missedChores,
-        bonuses,
-        pointsEarnedToday,
+        familyName: `${family.parentDisplayName}'s Family`,
+        children: childSummaries,
+        totalPointsEarned: childSummaries.reduce((s, c) => s + c.pointsEarnedToday, 0),
+        totalChoresCompleted: childSummaries.reduce((s, c) => s + c.completedChores.length, 0),
+        totalChoresMissed: childSummaries.reduce((s, c) => s + c.missedChores.length, 0),
       };
     },
   });
 }
 
+export function useDailySummary(date?: string) {
+  return useFamilySummary(date);
+}
+
 export function useSendSummaryEmail() {
   const { toast } = useToast();
+  const { data: config } = useFamilyConfig();
 
   return useMutation({
-    mutationFn: async () => {
-      const res = await fetch("/api/summary/send", { method: "POST" });
+    mutationFn: async (summary: FamilySummary) => {
+      const emails: string[] = [];
+      if (config?.parent_email) emails.push(config.parent_email);
+      if (config?.secondary_parent_email) emails.push(config.secondary_parent_email);
+
+      if (emails.length === 0) {
+        throw new Error("No parent emails configured. Please set at least one email in Settings.");
+      }
+
+      const res = await fetch("/api/summary/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emails, summary }),
+      });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message || "Failed to send email");
@@ -732,7 +802,7 @@ export function useSendSummaryEmail() {
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Email sent!", description: "Daily summary has been emailed." });
+      toast({ title: "Email sent!", description: "Daily summary has been emailed to all parent emails." });
     },
     onError: (err: Error) => {
       toast({ title: "Error sending email", description: err.message, variant: "destructive" });
