@@ -74,7 +74,7 @@ export default function SelectChild() {
     e.preventDefault();
     if (!newChildName.trim()) return;
     if (!family) {
-      toast({ title: "Loading...", description: "Family data is still loading. Please wait a moment and try again." });
+      toast({ title: "Setting up...", description: "Setting up your family profile. Please try again in a few seconds." });
       refreshFamily();
       return;
     }
@@ -85,6 +85,8 @@ export default function SelectChild() {
       if (newChildPin && newChildPin.length === 4) {
         pinHash = await bcrypt.hash(newChildPin, 10);
       }
+
+      console.log("[add-child] Inserting child for family:", family.familyId);
 
       const { data: child, error: insertErr } = await supabase
         .from("children")
@@ -97,7 +99,10 @@ export default function SelectChild() {
         .select("id")
         .single();
 
-      if (insertErr) throw insertErr;
+      if (insertErr) {
+        console.error("[add-child] Insert children error:", insertErr);
+        throw insertErr;
+      }
 
       const { error: pointsErr } = await supabase
         .from("child_points")
@@ -107,7 +112,10 @@ export default function SelectChild() {
           lifetime_points: 0,
         });
 
-      if (pointsErr) throw pointsErr;
+      if (pointsErr) {
+        console.error("[add-child] Insert child_points error:", pointsErr);
+        throw pointsErr;
+      }
 
       toast({ title: "Child added!", description: `${newChildName} has been created.` });
       setNewChildName("");
@@ -115,6 +123,7 @@ export default function SelectChild() {
       setShowAddChild(false);
       await refreshChildren();
     } catch (err: any) {
+      console.error("[add-child] Full error:", JSON.stringify(err, null, 2));
       const msg = err?.message || err?.details || "Failed to add child. Please try again.";
       toast({ title: "Error", description: msg, variant: "destructive" });
     } finally {

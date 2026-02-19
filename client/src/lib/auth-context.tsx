@@ -43,7 +43,7 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
   );
   const [loading, setLoading] = useState(true);
 
-  const loadFamilyData = useCallback(async (userId: string, retries = 5) => {
+  const loadFamilyData = useCallback(async (userId: string, retries = 3) => {
     for (let attempt = 0; attempt <= retries; attempt++) {
       const { data: profile, error: pErr } = await supabase
         .from("parent_profiles")
@@ -53,9 +53,21 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
 
       if (pErr || !profile) {
         if (attempt < retries) {
-          await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
           continue;
         }
+
+        console.log("[auth] No parent_profiles row found after retries. Attempting fallback family creation...");
+        const created = await createFamilyFallback(userId);
+        if (created) {
+          setFamily({
+            familyId: created.familyId,
+            parentDisplayName: created.displayName,
+          });
+          setChildrenList([]);
+          return;
+        }
+
         setFamily(null);
         setChildrenList([]);
         return;
@@ -85,6 +97,40 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
       return;
     }
   }, []);
+
+  const createFamilyFallback = async (_userId: string): Promise<{ familyId: string; displayName: string } | null> => {
+    try {
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      const displayName = currentUser?.user_metadata?.name || "Parent";
+
+      const { data, error } = await supabase.rpc("ensure_family_exists", {
+        p_display_name: displayName,
+      });
+
+      if (error) {
+        console.error("[auth] Fallback RPC ensure_family_exists failed:", error);
+        return null;
+      }
+
+      const result = typeof data === "string" ? JSON.parse(data) : data;
+
+      if (result?.error) {
+        console.error("[auth] Fallback RPC returned error:", result.error);
+        return null;
+      }
+
+      if (result?.family_id) {
+        console.log("[auth] Fallback: successfully ensured family exists", result);
+        return { familyId: result.family_id, displayName: result.display_name || displayName };
+      }
+
+      console.error("[auth] Fallback RPC returned unexpected data:", result);
+      return null;
+    } catch (err) {
+      console.error("[auth] Fallback family creation failed", err);
+      return null;
+    }
+  };
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => {

@@ -331,7 +331,54 @@ $$;
 ALTER TABLE family_config ADD COLUMN IF NOT EXISTS secondary_parent_email text;
 
 -- ============================================================
--- 8) Schema Updates – Daily Summary Scheduling
+-- 8) RPC – Ensure family exists (fallback if trigger didn't fire)
+-- ============================================================
+-- If the on_auth_user_created trigger failed or wasn't created,
+-- this RPC lets the client-side code create the family data.
+
+create or replace function ensure_family_exists(p_display_name text default 'Parent')
+returns json
+language plpgsql
+security definer
+as $$
+declare
+  v_user_id uuid;
+  v_family_id uuid;
+  v_profile record;
+begin
+  v_user_id := auth.uid();
+  if v_user_id is null then
+    return json_build_object('error', 'Not authenticated');
+  end if;
+
+  select family_id, parent_display_name into v_profile
+  from parent_profiles
+  where user_id = v_user_id;
+
+  if v_profile.family_id is not null then
+    return json_build_object('family_id', v_profile.family_id, 'display_name', coalesce(v_profile.parent_display_name, p_display_name));
+  end if;
+
+  select id into v_family_id from families where owner_user_id = v_user_id limit 1;
+
+  if v_family_id is null then
+    insert into families (owner_user_id, name) values (v_user_id, 'My Family')
+    returning id into v_family_id;
+  end if;
+
+  insert into parent_profiles (user_id, family_id, parent_display_name)
+  values (v_user_id, v_family_id, p_display_name)
+  on conflict (user_id) do nothing;
+
+  insert into family_config (family_id) values (v_family_id)
+  on conflict (family_id) do nothing;
+
+  return json_build_object('family_id', v_family_id, 'display_name', p_display_name);
+end;
+$$;
+
+-- ============================================================
+-- 9) Schema Updates – Daily Summary Scheduling
 -- ============================================================
 -- Run these in Supabase SQL Editor if the columns do not exist yet:
 
