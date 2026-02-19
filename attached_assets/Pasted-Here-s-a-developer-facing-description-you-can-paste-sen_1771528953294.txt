@@ -1,0 +1,112 @@
+Here’s a developer-facing description you can paste/send. It’s intentionally framework-agnostic so he can implement it in whatever structure he prefers (React Router, Next routes, vanilla pages, etc.).
+
+⸻
+
+Supabase Auth UX Updates Needed (Chore Helper)
+
+Goal
+
+Now that Supabase + SendGrid are configured, we need the app to properly support the full auth email lifecycle so beta users have a smooth experience:
+	•	Email verification after signup
+	•	Invites (optional)
+	•	Password reset
+	•	Clean redirects back to https://chore-helper.seanjanelle.com
+	•	Clear UI states for “check your email” and “set new password”
+
+This requires adding a small set of “drop-in” routes/pages and wiring them into the auth flow.
+
+⸻
+
+Required Routes / Pages
+
+1) Auth Callback Route
+
+Purpose: This is the landing route Supabase sends users to after they click:
+	•	Verify email link (signup confirmation)
+	•	Invite acceptance link (if we use invites)
+	•	Some magic-link flows (if ever enabled)
+
+What it should do (high level):
+	•	Load the page/route and let Supabase client “consume” the auth tokens in the URL (hash/query).
+	•	Confirm a session exists (or handle errors).
+	•	Redirect the user into the app (e.g., dashboard/home).
+	•	Show a minimal “Signing you in…” state while processing.
+
+Outcome: No more dead links or “localhost” issues; user lands back inside the app reliably.
+
+⸻
+
+2) Password Reset Route
+
+Purpose: Supabase sends users here when they click the “Reset Password” email.
+
+What it should do (high level):
+	•	Show a simple “Set new password” form (new password + confirm).
+	•	Use the Supabase client to update the user password once the token is present.
+	•	Show success/failure messaging.
+	•	On success, redirect to login or directly into the app.
+
+Outcome: Password reset emails actually result in a completed reset, not a confusing dead-end.
+
+⸻
+
+3) Optional: Auth Status / Message Pages
+
+These can be separate pages or a modal/state within existing pages—developer choice.
+
+Recommended UX states:
+	•	“Account created — check your email to verify.”
+	•	“Verification successful — redirecting…”
+	•	“This link expired — request a new one.”
+	•	“Password updated — please sign in.”
+
+These reduce support friction during beta testing.
+
+⸻
+
+Required App Logic Changes (Non-prescriptive)
+
+A) Signup Flow Handling
+
+When a user signs up:
+	•	If email verification is enabled, Supabase typically returns no active session until they confirm.
+	•	The UI should detect that scenario and not treat signup as “logged in.”
+	•	Show a clear message like “Check your email to verify.”
+
+Also include a way to:
+	•	resend verification email (optional)
+	•	return to login
+
+B) Login Flow Handling
+
+If a user tries to login but their email is unverified:
+	•	Show a clear message: “Please verify your email first.”
+	•	Provide an option to resend verification email (optional)
+
+C) Always Use Redirect Targets in Auth Calls
+
+Wherever the app triggers auth flows, it should pass redirect targets so Supabase always returns users to the right domain routes.
+
+Examples of flows that should include redirect destinations (in whatever way your codebase supports):
+	•	signup verification redirect → /auth/callback
+	•	password reset redirect → /auth/reset
+
+⸻
+
+Routing / Hosting Considerations
+	•	All routes should be accessible under: https://chore-helper.seanjanelle.com/*
+	•	Supabase URL config should already allow those redirects; the app must match them.
+	•	Make sure the callback/reset routes work on a cold load (user clicks email link in a fresh browser and lands there first).
+
+⸻
+
+Acceptance Criteria (How we know it’s done)
+	1.	Signup shows “check your email” if verification is required.
+	2.	Clicking verification email lands on the app domain and ends up logged in.
+	3.	Password reset email takes user to a working “set new password” page and completes successfully.
+	4.	If tokens are expired/invalid, user sees a helpful message and can retry.
+	5.	No references to localhost in the auth email links for prod usage.
+
+⸻
+
+If you want, I can also provide a short test script (manual QA checklist + expected outcomes) you can hand him so he can validate everything end-to-end quickly.

@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { supabase } from "@/lib/supabase";
 import { Link, useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, Shield, Eye, EyeOff } from "lucide-react";
+import { Loader2, Shield, Eye, EyeOff, Mail, CheckCircle, RefreshCw } from "lucide-react";
+
+const SITE_URL = import.meta.env.VITE_SITE_URL || (typeof window !== "undefined" ? window.location.origin : "");
 
 export default function Signup() {
   const { signUp } = useAuth();
@@ -16,6 +19,9 @@ export default function Signup() {
   const [loading, setLoading] = useState(false);
   const [showPin, setShowPin] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendSent, setResendSent] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,9 +43,23 @@ export default function Signup() {
 
     if (result.error) {
       setError(result.error);
+    } else if (result.needsVerification) {
+      setNeedsVerification(true);
+      setSuccess(true);
     } else {
       setSuccess(true);
     }
+  };
+
+  const handleResend = async () => {
+    setResending(true);
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email,
+      options: { emailRedirectTo: `${SITE_URL}/auth/callback` },
+    });
+    setResending(false);
+    if (!error) setResendSent(true);
   };
 
   if (success) {
@@ -47,14 +67,43 @@ export default function Signup() {
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
         <div className="w-full max-w-sm text-center">
           <div className="w-16 h-16 bg-green-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-green-500/30">
-            <Shield className="w-8 h-8 text-white" />
+            {needsVerification ? <Mail className="w-8 h-8 text-white" /> : <Shield className="w-8 h-8 text-white" />}
           </div>
           <h1 className="text-2xl font-display font-bold text-foreground mb-2" data-testid="text-signup-success">
             Account Created!
           </h1>
-          <p className="text-muted-foreground mb-6">
-            Check your email to confirm your account, then sign in.
-          </p>
+          {needsVerification ? (
+            <>
+              <p className="text-muted-foreground mb-6">
+                We sent a verification email to <span className="font-bold text-foreground">{email}</span>. Click the link in the email to activate your account.
+              </p>
+
+              {resendSent ? (
+                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-4 rounded-xl mb-4">
+                  <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400 mx-auto mb-2" />
+                  <p className="text-sm text-green-700 dark:text-green-300 font-medium" data-testid="text-resend-success">
+                    Verification email resent!
+                  </p>
+                </div>
+              ) : (
+                <Button
+                  variant="outline"
+                  className="w-full mb-3"
+                  onClick={handleResend}
+                  disabled={resending}
+                  data-testid="button-resend-verification"
+                >
+                  {resending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                  Resend Verification Email
+                </Button>
+              )}
+            </>
+          ) : (
+            <p className="text-muted-foreground mb-6">
+              Your account is ready. Sign in to get started!
+            </p>
+          )}
+
           <Link href="/login">
             <Button className="w-full" data-testid="button-go-to-login">Go to Sign In</Button>
           </Link>

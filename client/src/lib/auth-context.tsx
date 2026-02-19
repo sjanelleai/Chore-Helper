@@ -22,7 +22,7 @@ interface AuthContextType {
   activeChildId: string | null;
   activeChild: ChildProfile | null;
   loading: boolean;
-  signUp: (email: string, pin: string, name?: string) => Promise<{ error: string | null }>;
+  signUp: (email: string, pin: string, name?: string) => Promise<{ error: string | null; needsVerification?: boolean }>;
   signIn: (email: string, pin: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   selectChild: (childId: string) => void;
@@ -109,13 +109,18 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
   }, [loadFamilyData]);
 
   const signUp = async (email: string, pin: string, name?: string) => {
-    const { error } = await supabase.auth.signUp({
+    const siteUrl = import.meta.env.VITE_SITE_URL || (typeof window !== "undefined" ? window.location.origin : "");
+    const { data, error } = await supabase.auth.signUp({
       email,
       password: pin,
-      options: { data: { name: name || "Parent" } },
+      options: {
+        data: { name: name || "Parent" },
+        emailRedirectTo: `${siteUrl}/auth/callback`,
+      },
     });
     if (error) return { error: error.message };
-    return { error: null };
+    const needsVerification = data?.user && !data.session;
+    return { error: null, needsVerification: !!needsVerification };
   };
 
   const signIn = async (email: string, pin: string) => {

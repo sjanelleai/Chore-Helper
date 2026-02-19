@@ -13,6 +13,8 @@ import ParentPanel from "@/pages/ParentPanel";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import SelectChild from "@/pages/SelectChild";
+import AuthCallback from "@/pages/AuthCallback";
+import AuthReset from "@/pages/AuthReset";
 import { Loader2 } from "lucide-react";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -27,8 +29,9 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
+  const publicRoutes = ["/login", "/signup", "/auth/callback", "/auth/reset"];
   if (!session) {
-    if (location !== "/login" && location !== "/signup") {
+    if (!publicRoutes.some(r => location.startsWith(r))) {
       return <Redirect to="/login" />;
     }
   }
@@ -51,6 +54,8 @@ function Router() {
       <Switch>
         <Route path="/login" component={Login} />
         <Route path="/signup" component={Signup} />
+        <Route path="/auth/callback" component={AuthCallback} />
+        <Route path="/auth/reset" component={AuthReset} />
         <Route path="/select-child" component={SelectChild} />
         <Route path="/">
           <ChildGuard><Home /></ChildGuard>

@@ -41,3 +41,8 @@ waitForPort = 5000
 
 [agent]
 integrations = ["sendgrid:1.0.0"]
+
+[userenv]
+
+[userenv.production]
+VITE_SITE_URL = "https://chore-helper.seanjanelle.com"
