@@ -1,0 +1,135 @@
+Got it — your screenshot tells us two important things right away:
+	1.	family_config is your “family settings” table (key/value JSON + secondary email column).
+	2.	email_send_log currently has BOTH family_id (uuid) and family_key (text) — which usually means the migration to “family_key as identifier” is halfway and can easily cause logic bugs (especially if your code still writes family_id or your PK/unique constraint is still on family_id + date_key).
+
+Now, for your real issue: “Add family member errors and nothing happens.”
+Here’s what to have your developer review and what “expected Supabase behavior” should look like during QA.
+
+⸻
+
+What your developer should review (Supabase QA checklist)
+
+A) First: identify where “family members” are stored
+
+From your screenshot, family_config does not store family members by itself unless you’re putting them inside value JSON.
+
+So your dev needs to confirm which one is true:
+
+Option 1 (likely): You have tables like families / family_members / children
+
+If so, “Add family member” must insert into those tables (not shown in your screenshot).
+
+Option 2: Members are stored inside family_config.value
+
+Example:
+
+{
+  "children": [
+    { "id": "child_1", "name": "Fitz" },
+    { "id": "child_2", "name": "Merckx" }
+  ]
+}
+
+If this is your design, then “Add family member” must do an UPDATE to JSONB (or an UPSERT) — not an INSERT into some other table.
+
+✅ Your dev needs to answer this first because the required queries differ.
+
+⸻
+
+B) Expected Supabase behavior when adding a family member (what should happen)
+
+If you store children inside family_config.value (simple beta approach)
+
+Expected sequence:
+	1.	Read the family config row
+
+	•	SELECT * FROM family_config WHERE key = <family_key>
+
+	2.	If config row doesn’t exist, create it
+
+	•	INSERT family_config (key, value) ...
+OR better: UPSERT on key to avoid “already exists” failures.
+
+	3.	Update JSON to append the new child
+
+	•	UPDATE family_config SET value = <merged json> WHERE key = <family_key>
+
+The #1 failure here:
+	•	Insert tries to create a duplicate key → violates unique constraint → UI silently shows nothing.
+
+So in QA the dev should confirm they are using upsert (or handling “already exists” explicitly).
+
+⸻
+
+If you store children in a family_members table (more scalable)
+
+Expected sequence:
+	1.	Ensure the parent has/creates a family row
+	2.	Insert the child into family_members (or children)
+	3.	Optionally ensure family_config exists for that family
+
+The #1 failure here:
+	•	RLS blocks insert OR FK fails because the “family” row doesn’t exist.
+
+⸻
+
+C) The #1 thing to check when “nothing happens”: the actual error object + Supabase logs
+
+Tell your dev: during QA, capture and paste the full Supabase error object from the failed action:
+	•	error.code
+	•	error.message
+	•	error.details
+	•	error.hint
+
+And in Supabase Dashboard check:
+	•	Authentication → Logs (for auth-related blocks)
+	•	Database logs (for constraint / RLS issues)
+
+Typical smoking-gun messages:
+	•	new row violates row-level security policy
+	•	duplicate key value violates unique constraint "family_config_key_key"
+	•	violates foreign key constraint
+	•	null value in column ... violates not-null constraint
+
+If you see one of those, the fix is immediate.
+
+⸻
+
+One specific issue visible in your screenshot: email_send_log schema mismatch
+
+You’ve got both:
+	•	family_id uuid
+	•	family_key text
+
+That’s fine only if your code is consistent. But if your app/runner uses family_key and your DB constraints/logging still use family_id, you’ll get weird behavior.
+
+Have your dev confirm:
+	•	What is the PRIMARY KEY on email_send_log right now?
+	•	Is it (family_id, date_key) or (family_key, date_key)?
+
+If the primary key is still (family_id, date_key) and you’re writing by family_key, inserts can fail or you’ll get duplicate prevention that doesn’t work.
+
+(You don’t need to fix this to add a family member, but it will matter for nightly sends.)
+
+⸻
+
+What I’d ask your dev to do in QA (very concrete)
+
+When clicking “Add family member,” they should watch network calls and confirm one of these is happening:
+
+If children live in family_config JSON:
+	•	SELECT family_config WHERE key=...
+	•	UPSERT family_config (if missing)
+	•	UPDATE family_config.value to add child
+
+If children live in a table:
+	•	INSERT family_member/child row with correct family_id or family_key
+	•	and it must pass RLS
+
+⸻
+
+Quick question that will let me give you an exact “expected queries” spec
+
+When you add a family member, are you intending to store kids inside family_config.value (JSON) — or do you already have a separate table like children / family_members?
+
+If you answer that in one line, I’ll write the exact expected query sequence your dev should see in QA (including the safest upsert/update pattern).
