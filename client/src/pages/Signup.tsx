@@ -27,6 +27,11 @@ export default function Signup() {
     e.preventDefault();
     setError(null);
 
+    if (!name.trim()) {
+      setError("Please enter your name");
+      return;
+    }
+
     if (pin.length !== 6) {
       setError("PIN must be exactly 6 digits");
       return;
@@ -38,7 +43,7 @@ export default function Signup() {
     }
 
     setLoading(true);
-    const result = await signUp(email, pin, name || undefined);
+    const result = await signUp(email, pin, name.trim());
     setLoading(false);
 
     if (result.error) {
@@ -128,12 +133,13 @@ export default function Signup() {
         <Card className="p-6">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="text-sm font-bold text-muted-foreground mb-1 block">Your Name (optional)</label>
+              <label className="text-sm font-bold text-muted-foreground mb-1 block">Parent's Name</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Parent name"
+                required
+                placeholder="Your name"
                 className="w-full p-3 rounded-xl border bg-background text-foreground"
                 data-testid="input-name"
               />

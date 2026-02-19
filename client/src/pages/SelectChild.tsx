@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import bcrypt from "bcryptjs";
 
 export default function SelectChild() {
-  const { children, family, user, signOut, selectChild, refreshChildren } = useAuth();
+  const { children, family, signOut, selectChild, refreshChildren } = useAuth();
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
@@ -72,7 +72,11 @@ export default function SelectChild() {
 
   const handleAddChild = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newChildName.trim() || !family) return;
+    if (!newChildName.trim()) return;
+    if (!family) {
+      toast({ title: "Error", description: "Family data not loaded. Please sign out and sign in again.", variant: "destructive" });
+      return;
+    }
 
     setAddingChild(true);
     try {
@@ -110,7 +114,8 @@ export default function SelectChild() {
       setShowAddChild(false);
       await refreshChildren();
     } catch (err: any) {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      const msg = err?.message || err?.details || "Failed to add child. Please try again.";
+      toast({ title: "Error", description: msg, variant: "destructive" });
     } finally {
       setAddingChild(false);
     }
@@ -182,7 +187,7 @@ export default function SelectChild() {
             Who's playing?
           </h1>
           <p className="text-muted-foreground mt-1">
-            {user?.email || family?.parentDisplayName || "Your"}'s Family
+            {family?.parentDisplayName || "Your"}'s Family
           </p>
         </div>
 
