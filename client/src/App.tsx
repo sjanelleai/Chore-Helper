@@ -69,9 +69,7 @@ function Router() {
         <Route path="/badges">
           <ChildGuard><Badges /></ChildGuard>
         </Route>
-        <Route path="/parent">
-          <ChildGuard><ParentPanel /></ChildGuard>
-        </Route>
+        <Route path="/parent" component={ParentPanel} />
         <Route component={NotFound} />
       </Switch>
     </AuthGuard>

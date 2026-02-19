@@ -7,9 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Loader2, UserPlus, LogOut, User, Lock, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import bcrypt from "bcryptjs";
 
 export default function SelectChild() {
-  const { children, family, signOut, selectChild, refreshChildren } = useAuth();
+  const { children, family, user, signOut, selectChild, refreshChildren } = useAuth();
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
@@ -40,47 +41,78 @@ export default function SelectChild() {
     setPinError(null);
     setVerifying(true);
 
-    const { data, error } = await supabase.rpc("verify_child_pin", {
-      p_child_id: pinFor,
-      p_pin: pinInput,
-    });
+    try {
+      const { data: childData, error } = await supabase
+        .from("children")
+        .select("pin_hash")
+        .eq("id", pinFor)
+        .single();
 
-    setVerifying(false);
+      if (error || !childData?.pin_hash) {
+        setPinError("Something went wrong. Try again.");
+        setVerifying(false);
+        return;
+      }
 
-    if (error) {
+      const match = await bcrypt.compare(pinInput, childData.pin_hash);
+      setVerifying(false);
+
+      if (match) {
+        selectChild(pinFor);
+        navigate("/");
+      } else {
+        setPinError("Wrong PIN. Try again!");
+        setPinInput("");
+      }
+    } catch {
       setPinError("Something went wrong. Try again.");
-      return;
-    }
-
-    if (data === true) {
-      selectChild(pinFor);
-      navigate("/");
-    } else {
-      setPinError("Wrong PIN. Try again!");
-      setPinInput("");
+      setVerifying(false);
     }
   };
 
   const handleAddChild = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newChildName.trim()) return;
+    if (!newChildName.trim() || !family) return;
 
     setAddingChild(true);
-    const { error } = await supabase.rpc("create_child", {
-      p_name: newChildName.trim(),
-      p_avatar: null,
-      p_pin: newChildPin || null,
-    });
-    setAddingChild(false);
+    try {
+      let pinHash: string | null = null;
+      if (newChildPin && newChildPin.length === 4) {
+        pinHash = await bcrypt.hash(newChildPin, 10);
+      }
 
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    } else {
+      const { data: child, error: insertErr } = await supabase
+        .from("children")
+        .insert({
+          family_id: family.familyId,
+          name: newChildName.trim(),
+          avatar: null,
+          pin_hash: pinHash,
+        })
+        .select("id")
+        .single();
+
+      if (insertErr) throw insertErr;
+
+      const { error: pointsErr } = await supabase
+        .from("child_points")
+        .insert({
+          child_id: child.id,
+          points: 0,
+          lifetime_points: 0,
+        });
+
+      if (pointsErr) throw pointsErr;
+
       toast({ title: "Child added!", description: `${newChildName} has been created.` });
       setNewChildName("");
       setNewChildPin("");
       setShowAddChild(false);
       await refreshChildren();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setAddingChild(false);
     }
   };
 
@@ -150,7 +182,7 @@ export default function SelectChild() {
             Who's playing?
           </h1>
           <p className="text-muted-foreground mt-1">
-            {family?.parentDisplayName}'s Family
+            {user?.email || family?.parentDisplayName || "Your"}'s Family
           </p>
         </div>
 
