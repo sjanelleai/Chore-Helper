@@ -1,0 +1,64 @@
+3) What the frontend must do (QA checklist)
+
+When QA’ing “Add Child,” your dev should confirm these calls happen:
+
+On first Parent Zone load (or first Add Child attempt)
+	1.	ensure_family_for_user() RPC (or equivalent)
+	2.	select family_settings where family_id = ...
+	3.	select children where family_id = ...
+
+On Add Child click
+	1.	insert into children (family_id, display_name) OR call add_child() RPC
+	2.	refresh children list
+
+If the code is still doing anything with family_config.key/value for members, it’s wrong now.
+family_config should be for misc config, not for identity/membership.
+
+⸻
+
+4) Your screenshot reveals a likely conflict: you have two “settings” systems
+
+You now have:
+	•	family_settings (good, relational)
+	•	family_config (legacy json + secondary email column)
+
+If the app is trying to “set up family profile” by creating a family_config row, but the new UI expects family_settings, you can get that “Setting up…” loop.
+
+Recommendation:
+	•	Treat family_settings as the source of truth
+	•	Keep family_config only for feature flags or leftover config
+	•	Stop using family_config for “family exists” logic
+
+⸻
+
+5) Primary Parent Email auto-fill (what you asked)
+
+Best behavior:
+	•	On first family creation, set family_settings.primary_parent_email = auth.users.email
+	•	In UI, show it editable
+	•	Prevent duplicates by validating:
+	•	primary != secondary
+	•	lowercasing + trimming on save
+
+This should be done server-side (RPC) to avoid UI-only bugs.
+
+⸻
+
+6) One more thing in your schema: email_send_log still has family_id AND family_key
+
+Now that you have families.id, you should standardize on family_id going forward.
+Keeping both won’t break things, but it causes confusing code paths and duplicate-prevention bugs.
+
+Recommendation:
+	•	Use family_id as the primary identifier for nightly sends
+	•	Optionally keep family_key as debug info, not a key
+
+⸻
+
+7) What I want your developer to send you from one failed “Add Child” attempt
+
+This will immediately tell us which bucket it’s in:
+	1.	The exact Supabase error object logged in console:
+	•	code, message, details, hint
+	2.	A screenshot of the Network request that failed (endpoint + response)
+	3.	Result of query A above (family membership for this user)
