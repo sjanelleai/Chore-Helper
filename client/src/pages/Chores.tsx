@@ -11,7 +11,7 @@ export default function Chores() {
   const toggleMutation = useToggleChore();
   const [filter, setFilter] = useState('all');
 
-  const categories = chores ? [...new Set(chores.map(c => c.categoryName))] : [];
+  const categories = chores ? Array.from(new Set(chores.map(c => c.categoryName))) : [];
 
   const filteredChores = chores?.filter(chore =>
     filter === 'all' ? true : chore.categoryName === filter

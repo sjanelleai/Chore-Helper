@@ -1,50 +1,66 @@
-# Chore Helper
+# Chore Helper (HomeQuest)
 
 ## Overview
-A gamified chore-tracking app for kids with a parent control panel. Kids complete chores to earn points which they can spend on approved rewards. Parents can award bonus points, approve/reject rewards, configure allowance mode, and receive daily email summaries.
+A multi-family gamified chore-tracking app for kids with parent control panels. Parents sign up with email + 6-digit PIN, create child profiles, and configure which catalog chores/rewards are enabled with custom point/cost values. Kids complete chores to earn points and redeem rewards, all scoped to their family.
 
 ## Architecture
 - **Frontend**: React + Vite + TanStack Query + Wouter (routing) + Tailwind CSS + shadcn/ui + Framer Motion
-- **Backend**: Express.js (TypeScript)
-- **Database**: PostgreSQL via Drizzle ORM
-- **Email**: SendGrid integration for daily parent summaries
+- **Backend**: Express.js (TypeScript) - serves frontend + email endpoint only
+- **Database**: Supabase (PostgreSQL) with RLS policies for multi-family isolation
+- **Auth**: Supabase Auth (email + 6-digit PIN as password)
+- **Data Access**: Supabase JS client directly from frontend (RLS-protected)
+- **Email**: SendGrid integration for daily parent summaries (server-side only)
 - **Port**: 5000 (frontend + backend served together via Vite middleware)
 
+## Auth Flow
+1. Parent signs up with email + 6-digit PIN → Supabase Auth creates user
+2. Database trigger `handle_new_user()` auto-creates: family, parent_profile, family_config
+3. Parent adds children from SelectChild page (with optional 4-digit PIN)
+4. Child selection stored in localStorage + React context
+5. All data queries scoped by family_id and child_id via RLS
+
 ## Key Pages
-- `/` - Home dashboard (points display, quick actions, progress bar, parent zone shortcuts)
-- `/chores` - Chore checklist with section filters (morning/afternoon/bedtime)
-- `/rewards` - Reward store with category filters (only approved rewards shown)
+- `/login` - Parent sign in (email + 6-digit PIN)
+- `/signup` - Parent account creation
+- `/select-child` - Child profile picker (with optional PIN verification)
+- `/` - Home dashboard (points display, quick actions, progress bar, parent zone)
+- `/chores` - Chore checklist with category filters
+- `/rewards` - Reward store with category filters
 - `/badges` - Achievement badges + purchase history
-- `/parent` - Parent panel (bonus points, reward approvals, daily summary, settings)
+- `/parent` - Parent panel (child management, bonus points, catalog config, daily summary, settings)
 
-## Data Model (shared/schema.ts)
-- `chores` - Task list with points, icons, sections, completion status
-- `rewards` - Reward catalog with categories, costs, approval status, allowance flag
-- `badges` - Achievement badges with point thresholds
-- `purchases` - Purchase history
-- `userState` - Single-row config (points, email, timezone, allowance settings)
-- `ledgerEvents` - Point audit trail (CHORE_COMPLETE, CHORE_UNCHECK, BONUS_AWARD, REWARD_REDEEM)
-- `dailySummaries` - Email delivery tracking
+## Data Model (Supabase tables - see supabase-migration.sql)
+- `families` - Family groups, keyed by owner_user_id
+- `parent_profiles` - Links Supabase Auth users to families
+- `children` - Child profiles per family (name, avatar, optional pin_hash)
+- `child_points` - Running point totals per child (points, lifetime_points)
+- `family_config` - Per-family catalog settings (enabled items, custom points/costs, allowance settings)
+- `daily_status` - Per-child per-day chore completion tracking (JSONB completed_chores map)
+- `ledger_events` - Point audit trail (chore_completed, chore_unchecked, bonus_award, purchase)
+- `purchases` - Reward redemption history
+- `child_badges` - Earned achievement badges
 
-## API Routes (shared/routes.ts)
-- Chores: GET /api/chores, POST /api/chores/:id/toggle, POST /api/chores/reset
-- Rewards: GET /api/rewards, POST /api/rewards/:id/buy, POST /api/rewards/:id/approve
-- Badges: GET /api/badges
-- User: GET /api/user/state, PUT /api/user/settings, GET /api/user/purchases
-- Bonus: POST /api/bonus
-- Ledger: GET /api/ledger
-- Summary: GET /api/summary/daily, POST /api/summary/send
+## Catalog System (shared/catalog.ts)
+- Hardcoded master catalogs: CATALOG.chores, CATALOG.rewards, CATALOG.bonusReasons
+- STARTER_CHORES / STARTER_REWARDS define defaults for new families
+- family_config stores which items are enabled + custom point/cost overrides
+- flattenCatalog(), findCategoryName(), clampNumber(), localDateKey() utility functions
 
-## Recent Changes (Feb 2026)
-- Added parent panel with bonus points, reward approvals, daily summary, settings
-- Added ledger events for point audit trail
-- Added reward categories and approval workflow
-- Added allowance mode (points-to-dollars conversion)
-- Added SendGrid email integration for daily summaries
-- Expanded reward catalog across 9 categories
-- Added category filtering on Rewards page
+## Key Files
+- `supabase-migration.sql` - Full database schema, RLS policies, triggers, RPCs
+- `client/src/lib/supabase.ts` - Supabase client configuration
+- `client/src/lib/auth-context.tsx` - Auth provider with session management
+- `client/src/hooks/use-data.ts` - All data hooks (Supabase queries/mutations)
+- `shared/catalog.ts` - Master chore/reward catalogs
+- `shared/schema.ts` - TypeScript types (EnabledChore, EnabledReward)
+
+## Supabase RPCs
+- `create_child(p_name, p_avatar, p_pin)` - Creates child + child_points row
+- `verify_child_pin(p_child_id, p_pin)` - PIN verification for child login
+- `increment_child_points(p_child_id, p_delta, p_add_lifetime)` - Atomic point updates
 
 ## User Preferences
 - Kid-friendly, gamified UI with fun fonts and bright colors
 - Confetti animation on chore completion
 - Bottom navigation bar (5 tabs)
+- Mobile-first responsive design

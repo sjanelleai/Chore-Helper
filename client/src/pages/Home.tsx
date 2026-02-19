@@ -1,14 +1,16 @@
 import { Link } from "wouter";
 import { useUserState, useChores, useResetChores } from "@/hooks/use-data";
+import { useAuth } from "@/lib/auth-context";
 import { PointsDisplay } from "@/components/PointsDisplay";
 import { Navigation } from "@/components/Navigation";
 import { motion } from "framer-motion";
-import { CheckSquare, ShoppingBag, RotateCcw, Shield } from "lucide-react";
+import { CheckSquare, ShoppingBag, RotateCcw, Shield, Users } from "lucide-react";
 
 export default function Home() {
   const { data: user } = useUserState();
   const { data: chores } = useChores();
   const resetMutation = useResetChores();
+  const { activeChild, clearChild } = useAuth();
 
   const pendingChores = chores?.filter(c => !c.completed).length || 0;
 
@@ -28,7 +30,7 @@ export default function Home() {
         <div className="flex items-center justify-between gap-2 mb-8 flex-wrap">
           <div>
             <h1 className="text-3xl font-display font-bold text-foreground" data-testid="text-greeting">
-              Hi, Champion!
+              Hi, {activeChild?.name || "Champion"}!
             </h1>
             <p className="text-muted-foreground font-medium">Ready to earn some points?</p>
           </div>
@@ -118,6 +120,14 @@ export default function Home() {
                 Open Parent Panel
               </div>
             </Link>
+            <button
+              onClick={clearChild}
+              className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-muted-foreground/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors font-medium text-sm"
+              data-testid="button-switch-child"
+            >
+              <Users className="w-4 h-4" />
+              Switch Player
+            </button>
           </div>
         </div>
       </div>

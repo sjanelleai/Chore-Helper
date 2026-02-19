@@ -12,7 +12,7 @@ export default function Rewards() {
   const redeemMutation = useRedeemReward();
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
 
-  const categories = rewards ? [...new Set(rewards.map(r => r.category))] : [];
+  const categories = rewards ? Array.from(new Set(rewards.map(r => r.category))) : [];
 
   const filteredRewards = selectedCategory === "all"
     ? rewards

@@ -1,17 +1,103 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, buildUrl } from "@shared/routes";
 import { useToast } from "@/hooks/use-toast";
-import type { Badge, Purchase, UserState, LedgerEvent, EnabledChore, EnabledReward } from "@shared/schema";
+import { useAuth } from "@/lib/auth-context";
+import { supabase } from "@/lib/supabase";
+import {
+  CATALOG, STARTER_CHORES, STARTER_REWARDS,
+  flattenCatalog, findCategoryName, clampNumber, localDateKey,
+} from "@shared/catalog";
+import type { EnabledChore, EnabledReward } from "@shared/schema";
+
+const BADGE_DEFS = [
+  { key: "starter", name: "Starter Badge", threshold: 50, icon: "medal_bronze" },
+  { key: "helper2", name: "Helper Level 2", threshold: 150, icon: "medal_silver" },
+  { key: "master", name: "Chore Master", threshold: 300, icon: "medal_gold" },
+  { key: "star", name: "Super Star", threshold: 500, icon: "star" },
+  { key: "champion", name: "Champion", threshold: 1000, icon: "trophy" },
+  { key: "legend", name: "Legend", threshold: 2000, icon: "crown" },
+];
+
+// --- Family Config ---
+
+export function useFamilyConfig() {
+  const { family } = useAuth();
+  return useQuery({
+    queryKey: ["family_config", family?.familyId],
+    enabled: !!family?.familyId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("family_config")
+        .select("*")
+        .eq("family_id", family!.familyId)
+        .single();
+      if (error) throw error;
+      return data as {
+        id: string;
+        family_id: string;
+        enabled_chores: Record<string, boolean>;
+        enabled_rewards: Record<string, boolean>;
+        points_by_chore_id: Record<string, number>;
+        cost_by_reward_id: Record<string, number>;
+        allowance_enabled: boolean;
+        points_per_dollar: number;
+        parent_email: string | null;
+      };
+    },
+  });
+}
+
+// --- Child Points ---
+
+export function useChildPoints() {
+  const { activeChildId } = useAuth();
+  return useQuery({
+    queryKey: ["child_points", activeChildId],
+    enabled: !!activeChildId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("child_points")
+        .select("*")
+        .eq("child_id", activeChildId!)
+        .single();
+      if (error) throw error;
+      return data as { child_id: string; points: number; lifetime_points: number; updated_at: string };
+    },
+  });
+}
 
 // --- Chores ---
 
 export function useChores() {
+  const { activeChildId } = useAuth();
+  const { data: config } = useFamilyConfig();
+
   return useQuery<EnabledChore[]>({
-    queryKey: [api.chores.list.path],
+    queryKey: ["chores", activeChildId, config?.id],
+    enabled: !!activeChildId && !!config,
     queryFn: async () => {
-      const res = await fetch(api.chores.list.path);
-      if (!res.ok) throw new Error("Failed to fetch chores");
-      return res.json();
+      if (!config || !activeChildId) return [];
+
+      const today = localDateKey(new Date());
+      const { data: dailyData } = await supabase
+        .from("daily_status")
+        .select("completed_chores")
+        .eq("child_id", activeChildId)
+        .eq("date_key", today)
+        .single();
+
+      const completedMap = (dailyData?.completed_chores as Record<string, boolean>) || {};
+      const enabledMap = (config.enabled_chores as Record<string, boolean>) || {};
+      const pointsMap = (config.points_by_chore_id as Record<string, number>) || {};
+
+      return flattenCatalog(CATALOG.chores)
+        .filter(c => enabledMap[c.id])
+        .map(c => ({
+          id: c.id,
+          name: c.name,
+          points: clampNumber(pointsMap[c.id] ?? c.defaultPoints, 0, 999999),
+          completed: Boolean(completedMap[c.id]),
+          categoryName: findCategoryName(CATALOG.chores, c.id),
+        }));
     },
   });
 }
@@ -19,28 +105,84 @@ export function useChores() {
 export function useToggleChore() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { activeChildId, family } = useAuth();
 
   return useMutation({
     mutationFn: async (choreId: string) => {
-      const url = buildUrl(api.chores.toggle.path, { choreId });
-      const res = await fetch(url, { method: "POST" });
-      if (!res.ok) throw new Error("Failed to toggle chore");
-      return res.json();
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: [api.chores.list.path] });
-      queryClient.setQueryData([api.user.get.path], data.userState);
+      if (!activeChildId || !family) throw new Error("No child selected");
 
-      if (data.newBadges && data.newBadges.length > 0) {
-        data.newBadges.forEach((badge: Badge) => {
-          toast({
-            title: "Badge Unlocked!",
-            description: `You earned the "${badge.name}" badge!`,
-            className: "bg-accent text-accent-foreground border-none font-display text-lg",
-          });
-        });
-        queryClient.invalidateQueries({ queryKey: [api.badges.list.path] });
+      const { data: config } = await supabase
+        .from("family_config")
+        .select("enabled_chores, points_by_chore_id")
+        .eq("family_id", family.familyId)
+        .single();
+      if (!config) throw new Error("Config not found");
+
+      const enabledMap = (config.enabled_chores as Record<string, boolean>) || {};
+      if (!enabledMap[choreId]) throw new Error("Chore not enabled");
+
+      const today = localDateKey(new Date());
+
+      let { data: dailyData } = await supabase
+        .from("daily_status")
+        .select("*")
+        .eq("child_id", activeChildId)
+        .eq("date_key", today)
+        .single();
+
+      if (!dailyData) {
+        const { data: newDaily, error: insertErr } = await supabase
+          .from("daily_status")
+          .insert({ child_id: activeChildId, date_key: today, completed_chores: {} })
+          .select()
+          .single();
+        if (insertErr) throw insertErr;
+        dailyData = newDaily;
       }
+
+      const completedMap = (dailyData.completed_chores as Record<string, boolean>) || {};
+      const wasDone = Boolean(completedMap[choreId]);
+      const nowDone = !wasDone;
+      completedMap[choreId] = nowDone;
+
+      await supabase
+        .from("daily_status")
+        .update({ completed_chores: completedMap })
+        .eq("id", dailyData.id);
+
+      const pointsMap = (config.points_by_chore_id as Record<string, number>) || {};
+      const choreItem = flattenCatalog(CATALOG.chores).find(c => c.id === choreId);
+      const pts = clampNumber(pointsMap[choreId] ?? choreItem?.defaultPoints ?? 0, 0, 999999);
+      const pointsDelta = nowDone ? pts : -pts;
+
+      await supabase.rpc("increment_child_points", {
+        p_child_id: activeChildId,
+        p_delta: pointsDelta,
+        p_add_lifetime: nowDone,
+      });
+
+      await supabase.from("ledger_events").insert({
+        family_id: family.familyId,
+        child_id: activeChildId,
+        type: nowDone ? "chore_completed" : "chore_unchecked",
+        ref_id: choreId,
+        points_delta: pointsDelta,
+      });
+
+      const chore: EnabledChore = {
+        id: choreId,
+        name: choreItem?.name || choreId,
+        points: pts,
+        completed: nowDone,
+        categoryName: findCategoryName(CATALOG.chores, choreId),
+      };
+
+      return { chore, pointsDelta };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["chores"] });
+      queryClient.invalidateQueries({ queryKey: ["child_points"] });
+      queryClient.invalidateQueries({ queryKey: ["badges"] });
 
       if (data.chore.completed) {
         toast({
@@ -59,15 +201,29 @@ export function useToggleChore() {
 export function useResetChores() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { activeChildId } = useAuth();
 
   return useMutation({
     mutationFn: async () => {
-      const res = await fetch(api.chores.reset.path, { method: "POST" });
-      if (!res.ok) throw new Error("Failed to reset chores");
-      return res.json();
+      if (!activeChildId) throw new Error("No child selected");
+      const today = localDateKey(new Date());
+
+      const { data: dailyData } = await supabase
+        .from("daily_status")
+        .select("id")
+        .eq("child_id", activeChildId)
+        .eq("date_key", today)
+        .single();
+
+      if (dailyData) {
+        await supabase
+          .from("daily_status")
+          .update({ completed_chores: {} })
+          .eq("id", dailyData.id);
+      }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.chores.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["chores"] });
       toast({ title: "Ready for a new day!", description: "All chores have been reset." });
     },
   });
@@ -76,12 +232,27 @@ export function useResetChores() {
 // --- Rewards ---
 
 export function useRewards() {
+  const { data: config } = useFamilyConfig();
+
   return useQuery<EnabledReward[]>({
-    queryKey: [api.rewards.list.path],
+    queryKey: ["rewards", config?.id],
+    enabled: !!config,
     queryFn: async () => {
-      const res = await fetch(api.rewards.list.path);
-      if (!res.ok) throw new Error("Failed to fetch rewards");
-      return res.json();
+      if (!config) return [];
+      const enabledMap = (config.enabled_rewards as Record<string, boolean>) || {};
+      const costMap = (config.cost_by_reward_id as Record<string, number>) || {};
+
+      return flattenCatalog(CATALOG.rewards)
+        .filter(r => {
+          if (r.id.startsWith("allow_") && !config.allowance_enabled) return false;
+          return enabledMap[r.id];
+        })
+        .map(r => ({
+          id: r.id,
+          name: r.name,
+          cost: clampNumber(costMap[r.id] ?? r.defaultCost, 0, 999999),
+          category: findCategoryName(CATALOG.rewards, r.id),
+        }));
     },
   });
 }
@@ -89,23 +260,79 @@ export function useRewards() {
 export function useRedeemReward() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { activeChildId, family } = useAuth();
 
   return useMutation({
     mutationFn: async (rewardId: string) => {
-      const url = buildUrl(api.rewards.redeem.path, { rewardId });
-      const res = await fetch(url, { method: "POST" });
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.message || "Failed to redeem reward");
+      if (!activeChildId || !family) throw new Error("No child selected");
+
+      const { data: config } = await supabase
+        .from("family_config")
+        .select("enabled_rewards, cost_by_reward_id, allowance_enabled, points_per_dollar")
+        .eq("family_id", family.familyId)
+        .single();
+      if (!config) throw new Error("Config not found");
+
+      const enabledMap = (config.enabled_rewards as Record<string, boolean>) || {};
+      if (!enabledMap[rewardId]) throw new Error("Reward not enabled");
+
+      if (rewardId.startsWith("allow_") && !config.allowance_enabled) {
+        throw new Error("Allowance is not enabled");
       }
-      return res.json();
+
+      const rewardItem = flattenCatalog(CATALOG.rewards).find(r => r.id === rewardId);
+      if (!rewardItem) throw new Error("Reward not found");
+
+      const costMap = (config.cost_by_reward_id as Record<string, number>) || {};
+      let cost = clampNumber(costMap[rewardId] ?? rewardItem.defaultCost, 0, 999999);
+
+      if (rewardId.startsWith("allow_")) {
+        const dollars = rewardId === "allow_1" ? 1 : rewardId === "allow_5" ? 5 : 10;
+        cost = config.points_per_dollar * dollars;
+      }
+
+      const { data: pts } = await supabase
+        .from("child_points")
+        .select("points")
+        .eq("child_id", activeChildId)
+        .single();
+
+      if (!pts || pts.points < cost) throw new Error("Not enough points");
+
+      await supabase.rpc("increment_child_points", {
+        p_child_id: activeChildId,
+        p_delta: -cost,
+        p_add_lifetime: false,
+      });
+
+      const { data: purchase } = await supabase
+        .from("purchases")
+        .insert({
+          family_id: family.familyId,
+          child_id: activeChildId,
+          reward_id: rewardId,
+          reward_name: rewardItem.name,
+          cost,
+        })
+        .select()
+        .single();
+
+      await supabase.from("ledger_events").insert({
+        family_id: family.familyId,
+        child_id: activeChildId,
+        type: "purchase",
+        ref_id: rewardId,
+        points_delta: -cost,
+      });
+
+      return { purchase, rewardName: rewardItem.name };
     },
-    onSuccess: (data: any) => {
-      queryClient.setQueryData([api.user.get.path], data.userState);
-      queryClient.invalidateQueries({ queryKey: [api.user.purchases.path] });
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["child_points"] });
+      queryClient.invalidateQueries({ queryKey: ["purchases"] });
       toast({
         title: "Reward Redeemed!",
-        description: `You got ${data.purchase.rewardName}!`,
+        description: `You got ${data.rewardName}!`,
         className: "bg-secondary text-secondary-foreground border-none font-display",
       });
     },
@@ -116,87 +343,85 @@ export function useRedeemReward() {
 }
 
 export function usePurchases() {
-  return useQuery<Purchase[]>({
-    queryKey: [api.user.purchases.path],
+  const { activeChildId } = useAuth();
+  return useQuery({
+    queryKey: ["purchases", activeChildId],
+    enabled: !!activeChildId,
     queryFn: async () => {
-      const res = await fetch(api.user.purchases.path);
-      if (!res.ok) throw new Error("Failed to fetch purchases");
-      return res.json();
+      const { data, error } = await supabase
+        .from("purchases")
+        .select("*")
+        .eq("child_id", activeChildId!)
+        .order("purchased_at", { ascending: false });
+      if (error) throw error;
+      return data as Array<{
+        id: string;
+        reward_id: string;
+        reward_name: string;
+        cost: number;
+        purchased_at: string;
+      }>;
     },
   });
 }
 
-// --- User State & Settings ---
+// --- User State (now derived from child_points + family_config) ---
 
 export function useUserState() {
-  return useQuery<UserState>({
-    queryKey: [api.user.get.path],
-    queryFn: async () => {
-      const res = await fetch(api.user.get.path);
-      if (!res.ok) throw new Error("Failed to fetch user state");
-      return res.json();
-    },
-  });
+  const { data: pts } = useChildPoints();
+  const { data: config } = useFamilyConfig();
+
+  const combined = pts && config ? {
+    totalPoints: pts.points,
+    totalEarnedLifetime: pts.lifetime_points,
+    parentEmail: config.parent_email,
+    allowanceEnabled: config.allowance_enabled,
+    pointsPerDollar: config.points_per_dollar,
+  } : undefined;
+
+  return { data: combined, isLoading: !pts || !config };
 }
 
-export function useUpdateSettings() {
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-
-  return useMutation({
-    mutationFn: async (settings: any) => {
-      const res = await fetch(api.user.updateSettings.path, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Failed to update settings");
-      }
-      return res.json();
-    },
-    onSuccess: (data: UserState) => {
-      queryClient.setQueryData([api.user.get.path], data);
-      toast({ title: "Settings saved!", description: "Your preferences have been updated." });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
-  });
-}
-
-// --- Config (Parent Admin) ---
+// --- Config (for Parent Panel) ---
 
 export function useConfig() {
-  return useQuery({
-    queryKey: [api.config.get.path],
-    queryFn: async () => {
-      const res = await fetch(api.config.get.path);
-      if (!res.ok) throw new Error("Failed to fetch config");
-      return res.json();
-    },
-  });
+  const { data: config } = useFamilyConfig();
+
+  const mapped = config ? {
+    enabledChores: config.enabled_chores as Record<string, boolean>,
+    enabledRewards: config.enabled_rewards as Record<string, boolean>,
+    pointsByChoreId: config.points_by_chore_id as Record<string, number>,
+    costByRewardId: config.cost_by_reward_id as Record<string, number>,
+    allowanceEnabled: config.allowance_enabled,
+    pointsPerDollar: config.points_per_dollar,
+  } : undefined;
+
+  return { data: mapped, isLoading: !config };
 }
 
 export function useUpdateChoreConfig() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { family } = useAuth();
 
   return useMutation({
     mutationFn: async (data: { enabledChores: Record<string, boolean>; pointsByChoreId: Record<string, number> }) => {
-      const res = await fetch(api.config.updateChores.path, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) throw new Error("Failed to update chore config");
-      return res.json();
+      if (!family) throw new Error("No family");
+
+      const { error } = await supabase
+        .from("family_config")
+        .update({
+          enabled_chores: data.enabledChores,
+          points_by_chore_id: data.pointsByChoreId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("family_id", family.familyId);
+
+      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.config.get.path] });
-      queryClient.invalidateQueries({ queryKey: [api.chores.list.path] });
-      queryClient.invalidateQueries({ queryKey: [api.user.get.path] });
+      queryClient.invalidateQueries({ queryKey: ["family_config"] });
+      queryClient.invalidateQueries({ queryKey: ["chores"] });
       toast({ title: "Chore settings saved!" });
     },
     onError: (err: Error) => {
@@ -208,22 +433,84 @@ export function useUpdateChoreConfig() {
 export function useUpdateRewardConfig() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { family } = useAuth();
 
   return useMutation({
     mutationFn: async (data: { enabledRewards: Record<string, boolean>; costByRewardId: Record<string, number> }) => {
-      const res = await fetch(api.config.updateRewards.path, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) throw new Error("Failed to update reward config");
-      return res.json();
+      if (!family) throw new Error("No family");
+
+      const { error } = await supabase
+        .from("family_config")
+        .update({
+          enabled_rewards: data.enabledRewards,
+          cost_by_reward_id: data.costByRewardId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("family_id", family.familyId);
+
+      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.config.get.path] });
-      queryClient.invalidateQueries({ queryKey: [api.rewards.list.path] });
-      queryClient.invalidateQueries({ queryKey: [api.user.get.path] });
+      queryClient.invalidateQueries({ queryKey: ["family_config"] });
+      queryClient.invalidateQueries({ queryKey: ["rewards"] });
       toast({ title: "Reward settings saved!" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
+export function useUpdateSettings() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { family } = useAuth();
+
+  return useMutation({
+    mutationFn: async (settings: { parentEmail?: string | null; allowanceEnabled?: boolean; pointsPerDollar?: number }) => {
+      if (!family) throw new Error("No family");
+
+      const updateData: any = {};
+      if (settings.parentEmail !== undefined) updateData.parent_email = settings.parentEmail;
+      if (settings.allowanceEnabled !== undefined) updateData.allowance_enabled = settings.allowanceEnabled;
+      if (settings.pointsPerDollar !== undefined) updateData.points_per_dollar = settings.pointsPerDollar;
+      updateData.updated_at = new Date().toISOString();
+
+      if (settings.allowanceEnabled !== undefined && settings.pointsPerDollar) {
+        const ppd = clampNumber(settings.pointsPerDollar, 50, 5000);
+        const { data: existing } = await supabase
+          .from("family_config")
+          .select("cost_by_reward_id, enabled_rewards")
+          .eq("family_id", family.familyId)
+          .single();
+
+        if (existing) {
+          const costMap = (existing.cost_by_reward_id as Record<string, number>) || {};
+          costMap["allow_1"] = ppd * 1;
+          costMap["allow_5"] = ppd * 5;
+          costMap["allow_10"] = ppd * 10;
+          updateData.cost_by_reward_id = costMap;
+
+          if (!settings.allowanceEnabled) {
+            const enabledMap = (existing.enabled_rewards as Record<string, boolean>) || {};
+            Object.keys(enabledMap).forEach(id => {
+              if (id.startsWith("allow_")) enabledMap[id] = false;
+            });
+            updateData.enabled_rewards = enabledMap;
+          }
+        }
+      }
+
+      const { error } = await supabase
+        .from("family_config")
+        .update(updateData)
+        .eq("family_id", family.familyId);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["family_config"] });
+      toast({ title: "Settings saved!", description: "Your preferences have been updated." });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -234,14 +521,53 @@ export function useUpdateRewardConfig() {
 // --- Badges ---
 
 export function useBadges() {
-  return useQuery<Badge[]>({
-    queryKey: [api.badges.list.path],
+  const { activeChildId } = useAuth();
+  const { data: pts } = useChildPoints();
+
+  return useQuery({
+    queryKey: ["badges", activeChildId, pts?.lifetime_points],
+    enabled: !!activeChildId,
     queryFn: async () => {
-      const res = await fetch(api.badges.list.path);
-      if (!res.ok) throw new Error("Failed to fetch badges");
-      return res.json();
+      const { data: earnedBadges } = await supabase
+        .from("child_badges")
+        .select("badge_key")
+        .eq("child_id", activeChildId!);
+
+      const earnedKeys = new Set((earnedBadges || []).map((b: any) => b.badge_key));
+      const lifetime = pts?.lifetime_points || 0;
+
+      return BADGE_DEFS.map(b => ({
+        id: b.key,
+        name: b.name,
+        icon: b.icon,
+        threshold: b.threshold,
+        earned: earnedKeys.has(b.key) || lifetime >= b.threshold,
+        description: `Earn ${b.threshold} lifetime points`,
+      }));
     },
   });
+}
+
+async function checkAndAwardBadges(childId: string, lifetimePoints: number) {
+  const { data: existing } = await supabase
+    .from("child_badges")
+    .select("badge_key")
+    .eq("child_id", childId);
+
+  const earnedKeys = new Set((existing || []).map((b: any) => b.badge_key));
+  const newBadges = BADGE_DEFS.filter(b => !earnedKeys.has(b.key) && lifetimePoints >= b.threshold);
+
+  for (const badge of newBadges) {
+    await supabase.from("child_badges").insert({
+      child_id: childId,
+      badge_key: badge.key,
+      badge_name: badge.name,
+      badge_icon: badge.icon,
+      threshold: badge.threshold,
+    });
+  }
+
+  return newBadges;
 }
 
 // --- Bonus ---
@@ -249,26 +575,50 @@ export function useBadges() {
 export function useAwardBonus() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { activeChildId, family } = useAuth();
 
   return useMutation({
     mutationFn: async (data: { reason: string; points: number; note?: string }) => {
-      const res = await fetch(api.bonus.award.path, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+      if (!activeChildId || !family) throw new Error("No child selected");
+
+      const p = clampNumber(data.points, 1, 5000);
+
+      await supabase.rpc("increment_child_points", {
+        p_child_id: activeChildId,
+        p_delta: p,
+        p_add_lifetime: true,
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Failed to award bonus");
-      }
-      return res.json();
+
+      const { data: event } = await supabase
+        .from("ledger_events")
+        .insert({
+          family_id: family.familyId,
+          child_id: activeChildId,
+          type: "bonus_award",
+          ref_id: data.reason,
+          points_delta: p,
+          note: data.note || null,
+        })
+        .select()
+        .single();
+
+      const { data: pts } = await supabase
+        .from("child_points")
+        .select("lifetime_points")
+        .eq("child_id", activeChildId)
+        .single();
+
+      const newBadges = await checkAndAwardBadges(activeChildId, pts?.lifetime_points || 0);
+
+      return { event, pointsDelta: p, newBadges };
     },
-    onSuccess: (data: any) => {
-      queryClient.setQueryData([api.user.get.path], data.userState);
-      queryClient.invalidateQueries({ queryKey: [api.ledger.list.path] });
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["child_points"] });
+      queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      queryClient.invalidateQueries({ queryKey: ["badges"] });
+
       if (data.newBadges?.length > 0) {
-        queryClient.invalidateQueries({ queryKey: [api.badges.list.path] });
-        data.newBadges.forEach((badge: Badge) => {
+        data.newBadges.forEach((badge) => {
           toast({
             title: "Badge Unlocked!",
             description: `"${badge.name}" badge earned!`,
@@ -276,7 +626,7 @@ export function useAwardBonus() {
           });
         });
       }
-      toast({ title: "Bonus awarded!", description: `+${data.event.pointsDelta} points!` });
+      toast({ title: "Bonus awarded!", description: `+${data.pointsDelta} points!` });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -287,12 +637,19 @@ export function useAwardBonus() {
 // --- Ledger ---
 
 export function useLedger() {
-  return useQuery<LedgerEvent[]>({
-    queryKey: [api.ledger.list.path],
+  const { activeChildId } = useAuth();
+  return useQuery({
+    queryKey: ["ledger", activeChildId],
+    enabled: !!activeChildId,
     queryFn: async () => {
-      const res = await fetch(api.ledger.list.path);
-      if (!res.ok) throw new Error("Failed to fetch ledger");
-      return res.json();
+      const { data, error } = await supabase
+        .from("ledger_events")
+        .select("*")
+        .eq("child_id", activeChildId!)
+        .order("occurred_at", { ascending: false })
+        .limit(100);
+      if (error) throw error;
+      return data;
     },
   });
 }
@@ -300,13 +657,64 @@ export function useLedger() {
 // --- Summary ---
 
 export function useDailySummary(date?: string) {
-  const url = date ? `${api.summary.daily.path}?date=${date}` : api.summary.daily.path;
+  const { activeChildId } = useAuth();
+  const { data: config } = useFamilyConfig();
+
   return useQuery({
-    queryKey: [api.summary.daily.path, date],
+    queryKey: ["summary", activeChildId, date],
+    enabled: !!activeChildId && !!config,
     queryFn: async () => {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch summary");
-      return res.json();
+      if (!activeChildId || !config) return null;
+
+      const today = date || localDateKey(new Date());
+
+      const startOfDay = `${today}T00:00:00.000Z`;
+      const endOfDay = `${today}T23:59:59.999Z`;
+
+      const { data: events } = await supabase
+        .from("ledger_events")
+        .select("*")
+        .eq("child_id", activeChildId)
+        .gte("occurred_at", startOfDay)
+        .lte("occurred_at", endOfDay)
+        .order("occurred_at");
+
+      const { data: dailyData } = await supabase
+        .from("daily_status")
+        .select("completed_chores")
+        .eq("child_id", activeChildId)
+        .eq("date_key", today)
+        .single();
+
+      const completedMap = (dailyData?.completed_chores as Record<string, boolean>) || {};
+      const enabledMap = (config.enabled_chores as Record<string, boolean>) || {};
+      const allChores = flattenCatalog(CATALOG.chores);
+
+      const completedChores: string[] = [];
+      const missedChores: string[] = [];
+      allChores.forEach(c => {
+        if (!enabledMap[c.id]) return;
+        if (completedMap[c.id]) {
+          completedChores.push(c.name);
+        } else {
+          missedChores.push(c.name);
+        }
+      });
+
+      const eventsArr = events || [];
+      const bonuses = eventsArr
+        .filter((e: any) => e.type === "bonus_award")
+        .map((e: any) => ({ reason: e.ref_id, points: e.points_delta, note: e.note }));
+
+      const pointsEarnedToday = eventsArr.reduce((sum: number, e: any) => sum + e.points_delta, 0);
+
+      return {
+        date: today,
+        completedChores,
+        missedChores,
+        bonuses,
+        pointsEarnedToday,
+      };
     },
   });
 }
@@ -316,7 +724,7 @@ export function useSendSummaryEmail() {
 
   return useMutation({
     mutationFn: async () => {
-      const res = await fetch(api.summary.sendEmail.path, { method: "POST" });
+      const res = await fetch("/api/summary/send", { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message || "Failed to send email");

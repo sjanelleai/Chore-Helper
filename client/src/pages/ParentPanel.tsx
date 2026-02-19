@@ -4,6 +4,8 @@ import {
   useUpdateChoreConfig, useUpdateRewardConfig,
   useAwardBonus, useDailySummary, useSendSummaryEmail,
 } from "@/hooks/use-data";
+import { useAuth } from "@/lib/auth-context";
+import { supabase } from "@/lib/supabase";
 import { Navigation } from "@/components/Navigation";
 import { Header } from "@/components/Header";
 import { CATALOG } from "@shared/catalog";
@@ -13,7 +15,7 @@ import { cn } from "@/lib/utils";
 import {
   Shield, Mail, Send, Settings, Star,
   ChevronDown, ChevronUp, Loader2, DollarSign,
-  CheckSquare, ShoppingBag,
+  CheckSquare, ShoppingBag, UserPlus, LogOut, Users,
 } from "lucide-react";
 
 function BonusSection() {
@@ -486,12 +488,157 @@ function SummarySection() {
   );
 }
 
+function ChildManagementSection() {
+  const { children: kids, family, refreshChildren, activeChild, selectChild, signOut } = useAuth();
+  const [newChildName, setNewChildName] = useState("");
+  const [newChildPin, setNewChildPin] = useState("");
+  const [isAdding, setIsAdding] = useState(false);
+  const [addError, setAddError] = useState("");
+
+  const handleAddChild = async () => {
+    if (!newChildName.trim() || !family) return;
+    if (newChildPin && newChildPin.length !== 4) {
+      setAddError("PIN must be exactly 4 digits");
+      return;
+    }
+    setIsAdding(true);
+    setAddError("");
+
+    try {
+      const insertData: any = {
+        family_id: family.familyId,
+        name: newChildName.trim(),
+      };
+
+      if (newChildPin) {
+        insertData.pin_hash = newChildPin;
+      }
+
+      const { error } = await supabase
+        .from("children")
+        .insert(insertData);
+
+      if (error) throw error;
+
+      await refreshChildren();
+      setNewChildName("");
+      setNewChildPin("");
+    } catch (err: any) {
+      setAddError(err.message || "Failed to add child");
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  return (
+    <Card className="p-5">
+      <h3 className="font-display font-bold text-lg mb-4 flex items-center gap-2">
+        <Users className="w-5 h-5 text-primary" />
+        Manage Kids
+      </h3>
+
+      <div className="space-y-3 mb-4">
+        {kids.map(kid => (
+          <div
+            key={kid.id}
+            className={cn(
+              "flex items-center justify-between gap-2 p-3 rounded-xl border-2 transition-all",
+              kid.id === activeChild?.id
+                ? "border-primary bg-primary/5"
+                : "border-border"
+            )}
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold shrink-0">
+                {kid.name.charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <p className="font-bold text-foreground truncate">{kid.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {kid.hasPin ? "PIN protected" : "No PIN"}
+                </p>
+              </div>
+            </div>
+            {kid.id !== activeChild?.id && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => selectChild(kid.id)}
+                data-testid={`button-switch-to-${kid.name}`}
+              >
+                Switch
+              </Button>
+            )}
+            {kid.id === activeChild?.id && (
+              <span className="text-xs font-bold text-primary px-2 py-1 bg-primary/10 rounded-full">Active</span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="border-t pt-4 space-y-3">
+        <p className="text-sm font-bold text-muted-foreground">Add New Kid</p>
+        <input
+          type="text"
+          value={newChildName}
+          onChange={(e) => setNewChildName(e.target.value)}
+          placeholder="Child's name"
+          className="w-full p-3 rounded-xl border bg-background text-foreground"
+          data-testid="input-new-child-name"
+        />
+        <input
+          type="text"
+          value={newChildPin}
+          onChange={(e) => {
+            const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+            setNewChildPin(v);
+          }}
+          placeholder="Optional 4-digit PIN"
+          className="w-full p-3 rounded-xl border bg-background text-foreground"
+          data-testid="input-new-child-pin"
+        />
+        {addError && <p className="text-sm text-destructive">{addError}</p>}
+        <Button
+          onClick={handleAddChild}
+          disabled={isAdding || !newChildName.trim()}
+          className="w-full"
+          data-testid="button-add-child"
+        >
+          {isAdding ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+          Add Kid
+        </Button>
+      </div>
+
+      <div className="border-t pt-4 mt-4">
+        <Button
+          variant="outline"
+          onClick={signOut}
+          className="w-full text-destructive"
+          data-testid="button-sign-out"
+        >
+          <LogOut className="w-4 h-4" />
+          Sign Out
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 export default function ParentPanel() {
+  const { activeChild } = useAuth();
+
   return (
     <div className="min-h-screen bg-background pb-24">
       <Header title="Parent Zone" />
 
       <div className="max-w-md mx-auto px-4 pt-6 space-y-6">
+        {activeChild && (
+          <div className="bg-primary/5 border border-primary/20 rounded-xl p-3 text-center">
+            <p className="text-sm text-muted-foreground">Managing</p>
+            <p className="font-bold text-lg text-foreground" data-testid="text-active-child-name">{activeChild.name}</p>
+          </div>
+        )}
+        <ChildManagementSection />
         <BonusSection />
         <ChoreConfigSection />
         <RewardConfigSection />
