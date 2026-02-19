@@ -1,0 +1,563 @@
+Below is a developer-handoff Phase 2 Supabase Auth + Parent/Child Accounts document designed for a low-risk family chore app with easy numeric PIN login for beta testing.
+
+This design keeps things simple and secure enough without overbuilding:
+	•	Parents have real Supabase Auth accounts (email + PIN as password).
+	•	Children are profiles under a parent’s family (not separate Supabase Auth users).
+	•	Kids “sign in” by selecting their child profile + entering a child PIN.
+	•	All data access still happens under the parent’s authenticated session, so RLS stays clean.
+
+If you later want true child accounts with their own Supabase Auth logins, I’ll outline that at the end as “Phase 3.”
+
+⸻
+
+Supabase Integration Tech Document
+
+Project: HomeQuest (Chore Helper) — Parent Accounts + Child Profiles (Beta)
+
+Business Overview
+
+We need account support so multiple families can use the app:
+	•	A parent signs up with email + 6-digit PIN (beta-friendly).
+	•	Parent creates multiple children with names + optional 4-digit child PIN.
+	•	Kids can “sign in” to their profile using the child PIN.
+	•	Parent can configure chore/reward catalogs (enabled items + point values/costs).
+	•	App stores points/events per child and supports daily email summary later.
+
+Primary Use Case
+
+Shared iPad at home:
+	•	Parent logs in once.
+	•	Kids pick their profile and enter PIN to access their chores/rewards.
+
+⸻
+
+1) Architecture
+
+Client
+	•	Replit web app (JS/TS)
+	•	@supabase/supabase-js client
+	•	State in Supabase (not localStorage, except ephemeral UI state)
+
+Supabase
+	•	Auth: Supabase Auth for parents (auth.users)
+	•	DB: Postgres tables for family, children, configs, events
+	•	RLS: enabled on all tables, policies allow:
+	•	Parent can access everything for their family
+	•	Child access is mediated via parent session + selected child_id
+
+⸻
+
+2) Workflow (Screens + Flow)
+
+2.1 Parent Signup (Beta)
+
+UI
+	•	Email
+	•	6-digit Parent PIN (as password)
+	•	“Create account”
+
+API
+	•	supabase.auth.signUp({ email, password: pin })
+
+DB side
+	•	Create a families record and parent_profiles record.
+	•	This can be done via:
+	•	client insert after signup, OR
+	•	a DB trigger on auth.users (recommended for reliability)
+
+2.2 Parent Login
+
+UI
+	•	Email
+	•	PIN
+	•	“Sign in”
+
+API
+	•	supabase.auth.signInWithPassword({ email, password: pin })
+
+2.3 Create Child Profiles
+
+UI (Parent Settings)
+	•	Child name
+	•	Child PIN (optional; recommended 4 digits)
+	•	Avatar icon (optional)
+	•	Create child
+
+API
+	•	Insert row into children table (PIN stored hashed—see below)
+
+2.4 Child “Sign In”
+
+UI
+	•	Show list of children (cards)
+	•	Tap a child
+	•	Enter child PIN
+	•	If correct: set selected_child_id in app state
+
+API
+	•	Call RPC verify_child_pin(child_id, pin) returning boolean
+	•	If true: store selected_child_id locally (localStorage ok)
+
+⸻
+
+3) Data Model (Tables)
+
+3.1 families
+
+One family per parent account (beta). Later can support multiple parents.
+
+create table if not exists families (
+  id uuid primary key default gen_random_uuid(),
+  owner_user_id uuid not null references auth.users(id) on delete cascade,
+  name text,
+  created_at timestamptz not null default now()
+);
+
+3.2 parent_profiles
+
+create table if not exists parent_profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  family_id uuid not null references families(id) on delete cascade,
+  parent_display_name text,
+  created_at timestamptz not null default now()
+);
+
+3.3 children
+
+Stores child profiles under a family. Child PIN is hashed.
+
+create table if not exists children (
+  id uuid primary key default gen_random_uuid(),
+  family_id uuid not null references families(id) on delete cascade,
+  name text not null,
+  avatar text,
+  pin_hash text, -- store hashed pin (bcrypt/crypt)
+  created_at timestamptz not null default now()
+);
+
+3.4 child_points
+
+Store running points (or compute from ledger). Running total is easiest for MVP.
+
+create table if not exists child_points (
+  child_id uuid primary key references children(id) on delete cascade,
+  points int not null default 0,
+  updated_at timestamptz not null default now()
+);
+
+3.5 ledger_events
+
+Single source of truth for activity and daily summaries.
+
+create table if not exists ledger_events (
+  id uuid primary key default gen_random_uuid(),
+  family_id uuid not null references families(id) on delete cascade,
+  child_id uuid not null references children(id) on delete cascade,
+  type text not null, -- chore_completed, chore_unchecked, reward_redeem, bonus_award
+  ref_id text not null, -- chore_id or reward_id or bonus_reason
+  points_delta int not null,
+  note text,
+  occurred_at timestamptz not null default now()
+);
+create index if not exists idx_ledger_family_child_time on ledger_events(family_id, child_id, occurred_at desc);
+
+3.6 catalog_configs
+
+Parents configure enabled chores/rewards + points/cost.
+
+create table if not exists catalog_configs (
+  id uuid primary key default gen_random_uuid(),
+  family_id uuid not null references families(id) on delete cascade,
+  type text not null, -- "chore" or "reward"
+  item_id text not null,
+  category_id text,
+  enabled boolean not null default false,
+  value int not null default 0, -- points for chores, cost for rewards
+  updated_at timestamptz not null default now(),
+  unique (family_id, type, item_id)
+);
+
+
+⸻
+
+4) Security (RLS Policies)
+
+Enable RLS on all tables and enforce “parent owns family” access.
+
+Helper: get current user’s family_id
+
+We’ll use parent_profiles.family_id.
+
+alter table families enable row level security;
+alter table parent_profiles enable row level security;
+alter table children enable row level security;
+alter table child_points enable row level security;
+alter table ledger_events enable row level security;
+alter table catalog_configs enable row level security;
+
+4.1 parent_profiles
+
+Parents can read their profile.
+
+create policy "parent_profiles_select_own"
+on parent_profiles for select
+using (user_id = auth.uid());
+
+create policy "parent_profiles_insert_own"
+on parent_profiles for insert
+with check (user_id = auth.uid());
+
+4.2 families
+
+Parent can read only their owned family.
+
+create policy "families_select_owner"
+on families for select
+using (owner_user_id = auth.uid());
+
+4.3 children, catalog_configs, ledger_events, child_points
+
+Allow access if row’s family_id matches parent’s family.
+
+create or replace function current_family_id()
+returns uuid
+language sql stable
+as $$
+  select family_id from parent_profiles where user_id = auth.uid()
+$$;
+
+create policy "children_family_access"
+on children for all
+using (family_id = current_family_id())
+with check (family_id = current_family_id());
+
+create policy "catalog_family_access"
+on catalog_configs for all
+using (family_id = current_family_id())
+with check (family_id = current_family_id());
+
+create policy "ledger_family_access"
+on ledger_events for all
+using (family_id = current_family_id())
+with check (family_id = current_family_id());
+
+create policy "points_family_access"
+on child_points for all
+using (child_id in (select id from children where family_id = current_family_id()))
+with check (child_id in (select id from children where family_id = current_family_id()));
+
+
+⸻
+
+5) PIN Handling (Child PIN hashing + verification)
+
+5.1 Store hashed PIN (server-side)
+
+Use Postgres crypt() to hash. Enable extension:
+
+create extension if not exists pgcrypto;
+
+When inserting child:
+	•	pin_hash = crypt(pin, gen_salt('bf'))
+
+5.2 Verify child PIN via RPC
+
+Create a secure function:
+
+create or replace function verify_child_pin(p_child_id uuid, p_pin text)
+returns boolean
+language plpgsql
+security definer
+as $$
+declare
+  v_family uuid;
+  v_hash text;
+begin
+  -- Ensure child belongs to the caller's family
+  select family_id, pin_hash into v_family, v_hash
+  from children
+  where id = p_child_id;
+
+  if v_family is null then
+    return false;
+  end if;
+
+  if v_family <> current_family_id() then
+    return false;
+  end if;
+
+  if v_hash is null then
+    -- no PIN set => allow
+    return true;
+  end if;
+
+  return (crypt(p_pin, v_hash) = v_hash);
+end;
+$$;
+
+Important: security definer means it runs with elevated privileges; we still verify family ownership inside.
+
+⸻
+
+6) Account Bootstrapping (Create family automatically)
+
+Recommended approach: Trigger on new auth user
+
+When a parent signs up, automatically create family + profile.
+
+create or replace function handle_new_user()
+returns trigger
+language plpgsql
+security definer
+as $$
+declare
+  v_family_id uuid;
+begin
+  insert into families (owner_user_id, name)
+  values (new.id, 'My Family')
+  returning id into v_family_id;
+
+  insert into parent_profiles (user_id, family_id, parent_display_name)
+  values (new.id, v_family_id, coalesce(new.raw_user_meta_data->>'name', 'Parent'));
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute procedure handle_new_user();
+
+
+⸻
+
+7) Client Integration (Code Snippets)
+
+7.1 Supabase client setup
+
+import { createClient } from "@supabase/supabase-js";
+
+export const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
+
+7.2 Parent signup / login (PIN as password)
+
+export async function parentSignUp(email, pin) {
+  // pin is 6 digits; still stored as password in auth
+  return await supabase.auth.signUp({ email, password: pin });
+}
+
+export async function parentSignIn(email, pin) {
+  return await supabase.auth.signInWithPassword({ email, password: pin });
+}
+
+7.3 Load family + children
+
+export async function getMyFamilyAndKids() {
+  const { data: profile, error: pErr } = await supabase
+    .from("parent_profiles")
+    .select("family_id")
+    .single();
+
+  if (pErr) throw pErr;
+
+  const { data: kids, error: kErr } = await supabase
+    .from("children")
+    .select("id, name, avatar")
+    .eq("family_id", profile.family_id)
+    .order("created_at", { ascending: true });
+
+  if (kErr) throw kErr;
+
+  return { familyId: profile.family_id, kids };
+}
+
+7.4 Create child (with optional PIN)
+
+Important: hash on insert using crypt() in SQL. We can do it with an RPC to avoid exposing hash logic in client.
+
+RPC to create child safely
+
+create or replace function create_child(p_name text, p_avatar text, p_pin text)
+returns uuid
+language plpgsql
+security definer
+as $$
+declare
+  v_child_id uuid;
+  v_family uuid;
+  v_hash text;
+begin
+  v_family := current_family_id();
+  if v_family is null then raise exception 'No family'; end if;
+
+  if p_pin is null or length(p_pin) = 0 then
+    v_hash := null;
+  else
+    v_hash := crypt(p_pin, gen_salt('bf'));
+  end if;
+
+  insert into children (family_id, name, avatar, pin_hash)
+  values (v_family, p_name, p_avatar, v_hash)
+  returning id into v_child_id;
+
+  insert into child_points (child_id, points) values (v_child_id, 0);
+
+  return v_child_id;
+end;
+$$;
+
+Client call
+
+export async function createChild({ name, avatar, pin }) {
+  const { data, error } = await supabase.rpc("create_child", {
+    p_name: name,
+    p_avatar: avatar || null,
+    p_pin: pin || null
+  });
+  if (error) throw error;
+  return data; // child_id
+}
+
+7.5 Verify child PIN (child “sign in”)
+
+export async function verifyChildPin(childId, pin) {
+  const { data, error } = await supabase.rpc("verify_child_pin", {
+    p_child_id: childId,
+    p_pin: pin || ""
+  });
+  if (error) throw error;
+  return Boolean(data);
+}
+
+
+⸻
+
+8) Configurable Chores & Rewards (Parent Config)
+
+How config should work
+	•	The app ships with a static catalog in code (categories + item ids).
+	•	Parents choose which items are enabled and set their point/cost values.
+	•	We store that in catalog_configs.
+
+8.1 Upsert config values
+
+export async function upsertCatalogConfig({ familyId, type, itemId, categoryId, enabled, value }) {
+  const { error } = await supabase
+    .from("catalog_configs")
+    .upsert({
+      family_id: familyId,
+      type,
+      item_id: itemId,
+      category_id: categoryId,
+      enabled,
+      value
+    }, { onConflict: "family_id,type,item_id" });
+
+  if (error) throw error;
+}
+
+8.2 Load config
+
+export async function loadCatalogConfigs() {
+  const { data, error } = await supabase
+    .from("catalog_configs")
+    .select("type, item_id, category_id, enabled, value");
+
+  if (error) throw error;
+  return data;
+}
+
+
+⸻
+
+9) Bonus Points (Parent Award)
+
+9.1 Insert bonus event
+
+export async function awardBonus({ childId, points, reason, note }) {
+  // family_id can be derived server-side by RLS; but we store it explicitly in ledger_events so filter is fast.
+  // simplest: fetch family_id once at app init and pass it in.
+
+  const { data: profile } = await supabase.from("parent_profiles").select("family_id").single();
+
+  const { error } = await supabase.from("ledger_events").insert({
+    family_id: profile.family_id,
+    child_id: childId,
+    type: "bonus_award",
+    ref_id: reason,
+    points_delta: points,
+    note: note || null
+  });
+
+  if (error) throw error;
+
+  // also update running total in child_points (optional but recommended)
+  await supabase.rpc("increment_child_points", { p_child_id: childId, p_delta: points });
+}
+
+RPC for updating child points (recommended)
+
+create or replace function increment_child_points(p_child_id uuid, p_delta int)
+returns void
+language plpgsql
+security definer
+as $$
+begin
+  -- ensure child belongs to caller family
+  if not exists (
+    select 1 from children
+    where id = p_child_id and family_id = current_family_id()
+  ) then
+    raise exception 'Not allowed';
+  end if;
+
+  update child_points
+  set points = greatest(0, points + p_delta),
+      updated_at = now()
+  where child_id = p_child_id;
+end;
+$$;
+
+
+⸻
+
+10) Daily Email Summary (Phase 2.5 backlog)
+
+You already have a “mailto send now.” For automated nightly emails:
+	•	Use Supabase Edge Function + scheduled trigger (or external cron)
+	•	Query daily ledger_events per child
+	•	Send via SendGrid
+
+This is separate from core auth and can be layered on later.
+
+⸻
+
+11) Acceptance Criteria
+
+Developer considers this complete when:
+	1.	Parent can sign up/sign in using email + numeric PIN
+	2.	Family/profile is created automatically on signup
+	3.	Parent can create multiple children with optional PIN
+	4.	Child profile selection requires PIN verification (if set)
+	5.	Parent can configure enabled chores/rewards + set points/costs in DB
+	6.	Child view shows only enabled chores/rewards for that family
+	7.	Bonus points can be awarded and appear in ledger
+
+⸻
+
+Phase 3 Option (if you truly want children to have their own Auth accounts)
+
+If later you want kids to “log in” without a parent session, you’d create child Auth users via a Supabase Edge Function (service role) and assign them to the family. It’s more complex but doable. For beta, the parent-session + child PIN method is the best speed/benefit tradeoff.
+
+⸻
+
+Two quick implementation notes (so your dev doesn’t get stuck)
+	•	Passwords can be numeric in Supabase Auth. So parent PIN as password works fine.
+	•	Use DB triggers to auto-create family/profile—this removes “race conditions” in the client.
+
+If you want, paste your current folder structure (React or vanilla) and I’ll give you a clean “drop-in” file list (supabaseClient.ts, auth.ts, db.ts, settingsParent.tsx, etc.) matching your codebase.
