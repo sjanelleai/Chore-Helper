@@ -65,8 +65,13 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - Backend formats HTML email and sends via SendGrid to all configured parent emails
 - Supports primary + secondary parent email (both stored in family_config)
 - Email shows per-child breakdown: completed/missed chores, bonuses, purchases, points, balance
-- "Send Summary Email" button in Parent Panel triggers manual send
-- Schema change required: `ALTER TABLE family_config ADD COLUMN IF NOT EXISTS secondary_parent_email text;`
+- "Test Nightly Email Now" button in Parent Panel triggers immediate send for pipeline validation
+- Scheduling fields in family_config: daily_summary_enabled, daily_summary_time_local (HH:MM), daily_summary_timezone (IANA)
+- Schema changes required (run in Supabase SQL Editor):
+  - `ALTER TABLE family_config ADD COLUMN IF NOT EXISTS secondary_parent_email text;`
+  - `ALTER TABLE family_config ADD COLUMN IF NOT EXISTS daily_summary_enabled boolean DEFAULT false;`
+  - `ALTER TABLE family_config ADD COLUMN IF NOT EXISTS daily_summary_time_local text DEFAULT '18:00';`
+  - `ALTER TABLE family_config ADD COLUMN IF NOT EXISTS daily_summary_timezone text DEFAULT 'America/Denver';`
 
 ## User Preferences
 - Kid-friendly, gamified UI with fun fonts and bright colors

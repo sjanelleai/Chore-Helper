@@ -16,6 +16,7 @@ import {
   Shield, Mail, Send, Settings, Star,
   ChevronDown, ChevronUp, Loader2, DollarSign,
   CheckSquare, ShoppingBag, UserPlus, LogOut, Users,
+  Clock, Globe, Zap,
 } from "lucide-react";
 
 function BonusSection() {
@@ -334,6 +335,37 @@ function RewardConfigSection() {
   );
 }
 
+const COMMON_TIMEZONES = [
+  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+  "America/Anchorage", "Pacific/Honolulu", "America/Phoenix",
+  "America/Toronto", "America/Vancouver", "America/Edmonton",
+  "Europe/London", "Europe/Paris", "Europe/Berlin",
+  "Asia/Tokyo", "Asia/Shanghai", "Asia/Kolkata",
+  "Australia/Sydney", "Australia/Perth",
+  "Pacific/Auckland",
+];
+
+function formatTimezoneLabel(tz: string) {
+  try {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "short" });
+    const parts = formatter.formatToParts(now);
+    const abbr = parts.find(p => p.type === "timeZoneName")?.value || "";
+    const city = tz.split("/").pop()?.replace(/_/g, " ") || tz;
+    return `${city} (${abbr})`;
+  } catch {
+    return tz;
+  }
+}
+
+function detectTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return "America/Denver";
+  }
+}
+
 function SettingsSection() {
   const { data: userState } = useUserState();
   const updateSettings = useUpdateSettings();
@@ -341,6 +373,9 @@ function SettingsSection() {
   const [secondaryEmail, setSecondaryEmail] = useState("");
   const [allowance, setAllowance] = useState(false);
   const [pointsPerDollar, setPointsPerDollar] = useState(600);
+  const [summaryEnabled, setSummaryEnabled] = useState(false);
+  const [summaryTime, setSummaryTime] = useState("18:00");
+  const [summaryTimezone, setSummaryTimezone] = useState(detectTimezone());
 
   useEffect(() => {
     if (userState) {
@@ -348,8 +383,11 @@ function SettingsSection() {
       setSecondaryEmail(userState.secondaryParentEmail || "");
       setAllowance(userState.allowanceEnabled);
       setPointsPerDollar(userState.pointsPerDollar);
+      setSummaryEnabled(userState.dailySummaryEnabled);
+      setSummaryTime(userState.dailySummaryTimeLocal);
+      setSummaryTimezone(userState.dailySummaryTimezone);
     }
-  }, [userState?.parentEmail, userState?.secondaryParentEmail, userState?.allowanceEnabled, userState?.pointsPerDollar]);
+  }, [userState?.parentEmail, userState?.secondaryParentEmail, userState?.allowanceEnabled, userState?.pointsPerDollar, userState?.dailySummaryEnabled, userState?.dailySummaryTimeLocal, userState?.dailySummaryTimezone]);
 
   const handleSave = () => {
     updateSettings.mutate({
@@ -357,6 +395,9 @@ function SettingsSection() {
       secondaryParentEmail: secondaryEmail || null,
       allowanceEnabled: allowance,
       pointsPerDollar,
+      dailySummaryEnabled: summaryEnabled,
+      dailySummaryTimeLocal: summaryTime,
+      dailySummaryTimezone: summaryTimezone,
     });
   };
 
@@ -393,6 +434,63 @@ function SettingsSection() {
             data-testid="input-secondary-parent-email"
           />
         </div>
+
+        <div className="flex items-center justify-between gap-2 p-3 rounded-xl border">
+          <div>
+            <p className="font-bold text-sm flex items-center gap-1">
+              <Mail className="w-4 h-4" /> Nightly Summary Email
+            </p>
+            <p className="text-xs text-muted-foreground">Auto-send "today so far" at your chosen time</p>
+          </div>
+          <button
+            onClick={() => setSummaryEnabled(!summaryEnabled)}
+            className={cn(
+              "w-12 h-7 rounded-full transition-all relative shrink-0",
+              summaryEnabled ? "bg-green-500" : "bg-muted"
+            )}
+            data-testid="button-toggle-summary"
+          >
+            <div className={cn(
+              "w-5 h-5 bg-white rounded-full absolute top-1 transition-all shadow",
+              summaryEnabled ? "left-6" : "left-1"
+            )} />
+          </button>
+        </div>
+
+        {summaryEnabled && (
+          <div className="space-y-3 pl-2 border-l-2 border-primary/20 ml-2">
+            <div>
+              <label className="text-sm font-bold text-muted-foreground mb-1 flex items-center gap-1">
+                <Clock className="w-4 h-4" /> Send Time
+              </label>
+              <input
+                type="time"
+                value={summaryTime}
+                onChange={(e) => setSummaryTime(e.target.value)}
+                className="w-full p-3 rounded-xl border bg-background text-foreground"
+                data-testid="input-summary-time"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-bold text-muted-foreground mb-1 flex items-center gap-1">
+                <Globe className="w-4 h-4" /> Timezone
+              </label>
+              <select
+                value={summaryTimezone}
+                onChange={(e) => setSummaryTimezone(e.target.value)}
+                className="w-full p-3 rounded-xl border bg-background text-foreground"
+                data-testid="select-summary-timezone"
+              >
+                {COMMON_TIMEZONES.map(tz => (
+                  <option key={tz} value={tz}>{formatTimezoneLabel(tz)}</option>
+                ))}
+                {!COMMON_TIMEZONES.includes(summaryTimezone) && (
+                  <option value={summaryTimezone}>{formatTimezoneLabel(summaryTimezone)}</option>
+                )}
+              </select>
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center justify-between gap-2 p-3 rounded-xl border">
           <div>
@@ -521,18 +619,22 @@ function SummarySection() {
             </div>
           ))}
 
-          <Button
-            onClick={() => summary && sendEmail.mutate(summary)}
-            disabled={sendEmail.isPending || !hasAnyEmail}
-            variant="outline"
-            className="w-full"
-            data-testid="button-send-summary-email"
-          >
-            {sendEmail.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            {hasAnyEmail
-              ? `Send Summary Email${emailCount > 1 ? ` (${emailCount} recipients)` : ""}`
-              : "Set email in settings first"}
-          </Button>
+          <div className="space-y-2">
+            <Button
+              onClick={() => summary && sendEmail.mutate(summary)}
+              disabled={sendEmail.isPending || !hasAnyEmail}
+              className="w-full"
+              data-testid="button-test-nightly-send"
+            >
+              {sendEmail.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              {hasAnyEmail
+                ? `Test Nightly Email Now${emailCount > 1 ? ` (${emailCount} recipients)` : ""}`
+                : "Set email in settings first"}
+            </Button>
+            <p className="text-xs text-muted-foreground text-center">
+              Sends tonight's summary email right now to validate the full pipeline
+            </p>
+          </div>
         </div>
       ) : (
         <p className="text-sm text-muted-foreground text-center py-4">

@@ -42,6 +42,9 @@ export function useFamilyConfig() {
         points_per_dollar: number;
         parent_email: string | null;
         secondary_parent_email: string | null;
+        daily_summary_enabled: boolean;
+        daily_summary_time_local: string;
+        daily_summary_timezone: string;
       };
     },
   });
@@ -379,6 +382,9 @@ export function useUserState() {
     secondaryParentEmail: config.secondary_parent_email,
     allowanceEnabled: config.allowance_enabled,
     pointsPerDollar: config.points_per_dollar,
+    dailySummaryEnabled: config.daily_summary_enabled ?? false,
+    dailySummaryTimeLocal: config.daily_summary_time_local ?? "18:00",
+    dailySummaryTimezone: config.daily_summary_timezone ?? "America/Denver",
   } : undefined;
 
   return { data: combined, isLoading: !pts || !config };
@@ -469,7 +475,7 @@ export function useUpdateSettings() {
   const { family } = useAuth();
 
   return useMutation({
-    mutationFn: async (settings: { parentEmail?: string | null; secondaryParentEmail?: string | null; allowanceEnabled?: boolean; pointsPerDollar?: number }) => {
+    mutationFn: async (settings: { parentEmail?: string | null; secondaryParentEmail?: string | null; allowanceEnabled?: boolean; pointsPerDollar?: number; dailySummaryEnabled?: boolean; dailySummaryTimeLocal?: string; dailySummaryTimezone?: string }) => {
       if (!family) throw new Error("No family");
 
       const updateData: any = {};
@@ -477,6 +483,9 @@ export function useUpdateSettings() {
       if (settings.secondaryParentEmail !== undefined) updateData.secondary_parent_email = settings.secondaryParentEmail;
       if (settings.allowanceEnabled !== undefined) updateData.allowance_enabled = settings.allowanceEnabled;
       if (settings.pointsPerDollar !== undefined) updateData.points_per_dollar = settings.pointsPerDollar;
+      if (settings.dailySummaryEnabled !== undefined) updateData.daily_summary_enabled = settings.dailySummaryEnabled;
+      if (settings.dailySummaryTimeLocal !== undefined) updateData.daily_summary_time_local = settings.dailySummaryTimeLocal;
+      if (settings.dailySummaryTimezone !== undefined) updateData.daily_summary_timezone = settings.dailySummaryTimezone;
       updateData.updated_at = new Date().toISOString();
 
       if (settings.allowanceEnabled !== undefined && settings.pointsPerDollar) {

@@ -331,5 +331,14 @@ $$;
 ALTER TABLE family_config ADD COLUMN IF NOT EXISTS secondary_parent_email text;
 
 -- ============================================================
+-- 8) Schema Updates – Daily Summary Scheduling
+-- ============================================================
+-- Run these in Supabase SQL Editor if the columns do not exist yet:
+
+ALTER TABLE family_config ADD COLUMN IF NOT EXISTS daily_summary_enabled boolean DEFAULT false;
+ALTER TABLE family_config ADD COLUMN IF NOT EXISTS daily_summary_time_local text DEFAULT '18:00';
+ALTER TABLE family_config ADD COLUMN IF NOT EXISTS daily_summary_timezone text DEFAULT 'America/Denver';
+
+-- ============================================================
 -- Done! Your Supabase database is ready for HomeQuest.
 -- ============================================================
