@@ -88,61 +88,16 @@ export default function SelectChild() {
 
     setAddingChild(true);
     try {
-      console.log("[add-child] Inserting child for family:", family.familyId);
+      console.log("[add-child] Adding child via RPC for family:", family.familyId);
 
-      let pinHash: string | null = null;
-      if (newChildPin && newChildPin.length === 4) {
-        try {
-          pinHash = await bcrypt.hash(newChildPin, 10);
-        } catch (e) {
-          console.warn("[add-child] PIN hash failed, skipping PIN:", e);
-        }
-      }
+      const { data, error } = await supabase.rpc("add_child", {
+        p_display_name: newChildName.trim(),
+      });
 
-      let child: { id: string } | null = null;
+      if (error) throw error;
 
-      if (pinHash) {
-        const { data, error: insertErr } = await supabase
-          .from("children")
-          .insert({ family_id: family.familyId, display_name: newChildName.trim(), pin_hash: pinHash })
-          .select("id")
-          .single();
-
-        if (insertErr) {
-          console.warn("[add-child] Insert with pin_hash failed, retrying without:", insertErr);
-          const { data: fallbackData, error: fallbackErr } = await supabase
-            .from("children")
-            .insert({ family_id: family.familyId, display_name: newChildName.trim() })
-            .select("id")
-            .single();
-          if (fallbackErr) throw fallbackErr;
-          child = fallbackData;
-        } else {
-          child = data;
-        }
-      } else {
-        const { data, error: insertErr } = await supabase
-          .from("children")
-          .insert({ family_id: family.familyId, display_name: newChildName.trim() })
-          .select("id")
-          .single();
-        if (insertErr) throw insertErr;
-        child = data;
-      }
-
-      if (!child) throw new Error("Failed to create child profile");
-
-      const { error: pointsErr } = await supabase
-        .from("child_points")
-        .insert({
-          child_id: child.id,
-          points: 0,
-          lifetime_points: 0,
-        });
-
-      if (pointsErr) {
-        console.warn("[add-child] child_points insert failed (may not exist yet):", pointsErr);
-      }
+      const result = typeof data === "string" ? JSON.parse(data) : data;
+      if (result?.error) throw new Error(result.error);
 
       toast({ title: "Child added!", description: `${newChildName} has been created.` });
       setNewChildName("");

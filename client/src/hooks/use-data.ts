@@ -2,11 +2,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
-import {
-  CATALOG, STARTER_CHORES, STARTER_REWARDS,
-  flattenCatalog, findCategoryName, clampNumber, localDateKey,
-} from "@shared/catalog";
 import type { EnabledChore, EnabledReward } from "@shared/schema";
+
+function localDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 const BADGE_DEFS = [
   { key: "starter", name: "Starter Badge", threshold: 50, icon: "medal_bronze" },
@@ -16,6 +19,27 @@ const BADGE_DEFS = [
   { key: "champion", name: "Champion", threshold: 1000, icon: "trophy" },
   { key: "legend", name: "Legend", threshold: 2000, icon: "crown" },
 ];
+
+export interface ChoreCatalogItem {
+  id: string;
+  family_id: string;
+  category: string;
+  name: string;
+  points: number;
+  active: boolean;
+  sort_order: number;
+}
+
+export interface RewardCatalogItem {
+  id: string;
+  family_id: string;
+  category: string;
+  name: string;
+  cost: number;
+  requires_approval: boolean;
+  active: boolean;
+  sort_order: number;
+}
 
 // --- Family Settings (from family_settings table) ---
 
@@ -73,49 +97,85 @@ export function useFamilySettings() {
   });
 }
 
-// --- Catalog Config (frontend constants for now — Phase 2 will persist) ---
+// --- Chore Catalog (from chore_catalog table) ---
 
-function getDefaultCatalogConfig() {
-  const enabledChores: Record<string, boolean> = {};
-  const enabledRewards: Record<string, boolean> = {};
-  const pointsByChoreId: Record<string, number> = {};
-  const costByRewardId: Record<string, number> = {};
-
-  STARTER_CHORES.forEach(id => { enabledChores[id] = true; });
-  STARTER_REWARDS.forEach(id => { enabledRewards[id] = true; });
-
-  flattenCatalog(CATALOG.chores).forEach(c => {
-    pointsByChoreId[c.id] = c.defaultPoints;
-  });
-  flattenCatalog(CATALOG.rewards).forEach(r => {
-    costByRewardId[r.id] = r.defaultCost;
-  });
-
-  return { enabledChores, enabledRewards, pointsByChoreId, costByRewardId, allowanceEnabled: false, pointsPerDollar: 600 };
-}
-
-export function useFamilyConfig() {
+export function useChoreCatalog() {
   const { family } = useAuth();
-  return useQuery({
-    queryKey: ["family_config", family?.familyId],
+  return useQuery<ChoreCatalogItem[]>({
+    queryKey: ["chore_catalog", family?.familyId],
     enabled: !!family?.familyId,
     queryFn: async () => {
-      const defaults = getDefaultCatalogConfig();
-      return {
-        id: family!.familyId,
-        family_id: family!.familyId,
-        enabled_chores: defaults.enabledChores,
-        enabled_rewards: defaults.enabledRewards,
-        points_by_chore_id: defaults.pointsByChoreId,
-        cost_by_reward_id: defaults.costByRewardId,
-        allowance_enabled: defaults.allowanceEnabled,
-        points_per_dollar: defaults.pointsPerDollar,
-      };
+      const { data, error } = await supabase
+        .from("chore_catalog")
+        .select("*")
+        .eq("family_id", family!.familyId)
+        .order("sort_order", { ascending: true });
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        console.log("[use-data] No chore catalog found, seeding defaults...");
+        const { data: seedResult, error: seedErr } = await supabase.rpc("seed_default_catalog", {
+          p_family_id: family!.familyId,
+        });
+
+        if (seedErr) {
+          console.error("[use-data] Failed to seed catalog:", seedErr);
+          return [];
+        }
+
+        console.log("[use-data] Seed result:", seedResult);
+
+        const { data: refetched, error: refetchErr } = await supabase
+          .from("chore_catalog")
+          .select("*")
+          .eq("family_id", family!.familyId)
+          .order("sort_order", { ascending: true });
+
+        if (refetchErr) throw refetchErr;
+        return (refetched || []) as ChoreCatalogItem[];
+      }
+
+      return data as ChoreCatalogItem[];
     },
   });
 }
 
-// --- Child Points ---
+// --- Reward Catalog (from reward_catalog table) ---
+
+export function useRewardCatalog() {
+  const { family } = useAuth();
+  return useQuery<RewardCatalogItem[]>({
+    queryKey: ["reward_catalog", family?.familyId],
+    enabled: !!family?.familyId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("reward_catalog")
+        .select("*")
+        .eq("family_id", family!.familyId)
+        .order("sort_order", { ascending: true });
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        await supabase.rpc("seed_default_catalog", { p_family_id: family!.familyId });
+
+        const { data: refetched, error: refetchErr } = await supabase
+          .from("reward_catalog")
+          .select("*")
+          .eq("family_id", family!.familyId)
+          .order("sort_order", { ascending: true });
+
+        if (refetchErr) throw refetchErr;
+        return (refetched || []) as RewardCatalogItem[];
+      }
+
+      return data as RewardCatalogItem[];
+    },
+  });
+}
+
+// --- Child Points (derived from points_ledger) ---
 
 export function useChildPoints() {
   const { activeChildId } = useAuth();
@@ -124,133 +184,106 @@ export function useChildPoints() {
     enabled: !!activeChildId,
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("child_points")
-        .select("*")
-        .eq("child_id", activeChildId!)
-        .single();
+        .from("points_ledger")
+        .select("points_delta")
+        .eq("child_id", activeChildId!);
+
       if (error) throw error;
-      return data as { child_id: string; points: number; lifetime_points: number; updated_at: string };
+
+      const rows = data || [];
+      let points = 0;
+      let lifetime_points = 0;
+      for (const row of rows) {
+        points += row.points_delta;
+        if (row.points_delta > 0) {
+          lifetime_points += row.points_delta;
+        }
+      }
+
+      return { child_id: activeChildId!, points, lifetime_points, updated_at: new Date().toISOString() };
     },
   });
 }
 
-// --- Chores ---
+// --- Chores (active catalog + today's daily_status) ---
 
 export function useChores() {
   const { activeChildId } = useAuth();
-  const { data: config } = useFamilyConfig();
+  const { data: catalog } = useChoreCatalog();
 
   return useQuery<EnabledChore[]>({
-    queryKey: ["chores", activeChildId, config?.id],
-    enabled: !!activeChildId && !!config,
+    queryKey: ["chores", activeChildId, catalog?.length],
+    enabled: !!activeChildId && !!catalog && catalog.length > 0,
     queryFn: async () => {
-      if (!config || !activeChildId) return [];
+      if (!catalog || !activeChildId) return [];
 
+      const activeChores = catalog.filter(c => c.active);
       const today = localDateKey(new Date());
+
       const { data: dailyData } = await supabase
         .from("daily_status")
-        .select("completed_chores")
+        .select("completed_chore_ids")
         .eq("child_id", activeChildId)
         .eq("date_key", today)
         .single();
 
-      const completedMap = (dailyData?.completed_chores as Record<string, boolean>) || {};
-      const enabledMap = (config.enabled_chores as Record<string, boolean>) || {};
-      const pointsMap = (config.points_by_chore_id as Record<string, number>) || {};
+      const completedIds = new Set<string>(
+        (dailyData?.completed_chore_ids as string[]) || []
+      );
 
-      return flattenCatalog(CATALOG.chores)
-        .filter(c => enabledMap[c.id])
-        .map(c => ({
-          id: c.id,
-          name: c.name,
-          points: clampNumber(pointsMap[c.id] ?? c.defaultPoints, 0, 999999),
-          completed: Boolean(completedMap[c.id]),
-          categoryName: findCategoryName(CATALOG.chores, c.id),
-        }));
+      return activeChores.map(c => ({
+        id: c.id,
+        name: c.name,
+        points: c.points,
+        completed: completedIds.has(c.id),
+        categoryName: c.category,
+      }));
     },
   });
 }
+
+// --- Toggle Chore (via RPC) ---
 
 export function useToggleChore() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { activeChildId, family } = useAuth();
+  const { activeChildId } = useAuth();
 
   return useMutation({
     mutationFn: async (choreId: string) => {
-      if (!activeChildId || !family) throw new Error("No child selected");
-
-      const defaults = getDefaultCatalogConfig();
-      const enabledMap = defaults.enabledChores;
-      if (!enabledMap[choreId]) throw new Error("Chore not enabled");
+      if (!activeChildId) throw new Error("No child selected");
 
       const today = localDateKey(new Date());
 
-      let { data: dailyData } = await supabase
-        .from("daily_status")
-        .select("*")
-        .eq("child_id", activeChildId)
-        .eq("date_key", today)
-        .single();
-
-      if (!dailyData) {
-        const { data: newDaily, error: insertErr } = await supabase
-          .from("daily_status")
-          .insert({ child_id: activeChildId, date_key: today, completed_chores: {} })
-          .select()
-          .single();
-        if (insertErr) throw insertErr;
-        dailyData = newDaily;
-      }
-
-      const completedMap = (dailyData.completed_chores as Record<string, boolean>) || {};
-      const wasDone = Boolean(completedMap[choreId]);
-      const nowDone = !wasDone;
-      completedMap[choreId] = nowDone;
-
-      await supabase
-        .from("daily_status")
-        .update({ completed_chores: completedMap })
-        .eq("id", dailyData.id);
-
-      const pointsMap = defaults.pointsByChoreId;
-      const choreItem = flattenCatalog(CATALOG.chores).find(c => c.id === choreId);
-      const pts = clampNumber(pointsMap[choreId] ?? choreItem?.defaultPoints ?? 0, 0, 999999);
-      const pointsDelta = nowDone ? pts : -pts;
-
-      await supabase.rpc("increment_child_points", {
+      const { data, error } = await supabase.rpc("toggle_chore", {
         p_child_id: activeChildId,
-        p_delta: pointsDelta,
-        p_add_lifetime: nowDone,
+        p_chore_id: choreId,
+        p_date_key: today,
       });
 
-      await supabase.from("ledger_events").insert({
-        family_id: family.familyId,
-        child_id: activeChildId,
-        type: nowDone ? "chore_completed" : "chore_unchecked",
-        ref_id: choreId,
-        points_delta: pointsDelta,
-      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
 
-      const chore: EnabledChore = {
-        id: choreId,
-        name: choreItem?.name || choreId,
-        points: pts,
-        completed: nowDone,
-        categoryName: findCategoryName(CATALOG.chores, choreId),
+      return data as {
+        child_id: string;
+        date_key: string;
+        completed_chore_ids: string[];
+        points_earned: number;
+        toggled_chore_id: string;
+        was_completed: boolean;
+        points_delta: number;
       };
-
-      return { chore, pointsDelta };
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["chores"] });
       queryClient.invalidateQueries({ queryKey: ["child_points"] });
       queryClient.invalidateQueries({ queryKey: ["badges"] });
+      queryClient.invalidateQueries({ queryKey: ["ledger"] });
 
-      if (data.chore.completed) {
+      if (data.was_completed) {
         toast({
           title: "Great job!",
-          description: `+${data.chore.points} points added!`,
+          description: `+${data.points_delta} points added!`,
           className: "bg-green-500 text-white border-none",
         });
       }
@@ -260,6 +293,8 @@ export function useToggleChore() {
     },
   });
 }
+
+// --- Reset Chores ---
 
 export function useResetChores() {
   const queryClient = useQueryClient();
@@ -271,19 +306,13 @@ export function useResetChores() {
       if (!activeChildId) throw new Error("No child selected");
       const today = localDateKey(new Date());
 
-      const { data: dailyData } = await supabase
+      const { error } = await supabase
         .from("daily_status")
-        .select("id")
+        .update({ completed_chore_ids: [], points_earned: 0 })
         .eq("child_id", activeChildId)
-        .eq("date_key", today)
-        .single();
+        .eq("date_key", today);
 
-      if (dailyData) {
-        await supabase
-          .from("daily_status")
-          .update({ completed_chores: {} })
-          .eq("id", dailyData.id);
-      }
+      if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["chores"] });
@@ -292,104 +321,61 @@ export function useResetChores() {
   });
 }
 
-// --- Rewards ---
+// --- Rewards (active catalog) ---
 
 export function useRewards() {
-  const { data: config } = useFamilyConfig();
+  const { data: catalog } = useRewardCatalog();
 
   return useQuery<EnabledReward[]>({
-    queryKey: ["rewards", config?.id],
-    enabled: !!config,
+    queryKey: ["rewards", catalog?.length],
+    enabled: !!catalog && catalog.length > 0,
     queryFn: async () => {
-      if (!config) return [];
-      const enabledMap = (config.enabled_rewards as Record<string, boolean>) || {};
-      const costMap = (config.cost_by_reward_id as Record<string, number>) || {};
-
-      return flattenCatalog(CATALOG.rewards)
-        .filter(r => {
-          if (r.id.startsWith("allow_") && !config.allowance_enabled) return false;
-          return enabledMap[r.id];
-        })
+      if (!catalog) return [];
+      return catalog
+        .filter(r => r.active)
         .map(r => ({
           id: r.id,
           name: r.name,
-          cost: clampNumber(costMap[r.id] ?? r.defaultCost, 0, 999999),
-          category: findCategoryName(CATALOG.rewards, r.id),
+          cost: r.cost,
+          category: r.category,
         }));
     },
   });
 }
 
+// --- Redeem Reward (via RPC) ---
+
 export function useRedeemReward() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { activeChildId, family } = useAuth();
+  const { activeChildId } = useAuth();
 
   return useMutation({
     mutationFn: async (rewardId: string) => {
-      if (!activeChildId || !family) throw new Error("No child selected");
+      if (!activeChildId) throw new Error("No child selected");
 
-      const defaults = getDefaultCatalogConfig();
-      const enabledMap = defaults.enabledRewards;
-      if (!enabledMap[rewardId]) throw new Error("Reward not enabled");
-
-      if (rewardId.startsWith("allow_") && !defaults.allowanceEnabled) {
-        throw new Error("Allowance is not enabled");
-      }
-
-      const rewardItem = flattenCatalog(CATALOG.rewards).find(r => r.id === rewardId);
-      if (!rewardItem) throw new Error("Reward not found");
-
-      const costMap = defaults.costByRewardId;
-      let cost = clampNumber(costMap[rewardId] ?? rewardItem.defaultCost, 0, 999999);
-
-      if (rewardId.startsWith("allow_")) {
-        const dollars = rewardId === "allow_1" ? 1 : rewardId === "allow_5" ? 5 : 10;
-        cost = defaults.pointsPerDollar * dollars;
-      }
-
-      const { data: pts } = await supabase
-        .from("child_points")
-        .select("points")
-        .eq("child_id", activeChildId)
-        .single();
-
-      if (!pts || pts.points < cost) throw new Error("Not enough points");
-
-      await supabase.rpc("increment_child_points", {
+      const { data, error } = await supabase.rpc("redeem_reward", {
         p_child_id: activeChildId,
-        p_delta: -cost,
-        p_add_lifetime: false,
+        p_reward_id: rewardId,
       });
 
-      const { data: purchase } = await supabase
-        .from("purchases")
-        .insert({
-          family_id: family.familyId,
-          child_id: activeChildId,
-          reward_id: rewardId,
-          reward_name: rewardItem.name,
-          cost,
-        })
-        .select()
-        .single();
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
 
-      await supabase.from("ledger_events").insert({
-        family_id: family.familyId,
-        child_id: activeChildId,
-        type: "purchase",
-        ref_id: rewardId,
-        points_delta: -cost,
-      });
-
-      return { purchase, rewardName: rewardItem.name };
+      return data as {
+        redemption_id: string;
+        reward_name: string;
+        cost: number;
+        new_points: number;
+      };
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["child_points"] });
-      queryClient.invalidateQueries({ queryKey: ["purchases"] });
+      queryClient.invalidateQueries({ queryKey: ["redemptions"] });
+      queryClient.invalidateQueries({ queryKey: ["ledger"] });
       toast({
         title: "Reward Redeemed!",
-        description: `You got ${data.rewardName}!`,
+        description: `You got ${data.reward_name}!`,
         className: "bg-secondary text-secondary-foreground border-none font-display",
       });
     },
@@ -399,43 +385,47 @@ export function useRedeemReward() {
   });
 }
 
-export function usePurchases() {
-  const { activeChildId } = useAuth();
+// --- Redemptions (purchases history) ---
+
+export function useRedemptions() {
+  const { activeChildId, family } = useAuth();
   return useQuery({
-    queryKey: ["purchases", activeChildId],
-    enabled: !!activeChildId,
+    queryKey: ["redemptions", activeChildId],
+    enabled: !!activeChildId && !!family,
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("purchases")
-        .select("*")
+        .from("reward_redemptions")
+        .select("id, reward_id, cost, status, created_at, reward_catalog(name)")
         .eq("child_id", activeChildId!)
-        .order("purchased_at", { ascending: false });
+        .order("created_at", { ascending: false });
       if (error) throw error;
-      return data as Array<{
-        id: string;
-        reward_id: string;
-        reward_name: string;
-        cost: number;
-        purchased_at: string;
-      }>;
+      return (data || []).map((r: any) => ({
+        id: r.id,
+        reward_id: r.reward_id,
+        reward_name: r.reward_catalog?.name || "Unknown",
+        cost: r.cost,
+        status: r.status,
+        purchased_at: r.created_at,
+      }));
     },
   });
 }
 
-// --- User State (derived from child_points + family_settings) ---
+export function usePurchases() {
+  return useRedemptions();
+}
+
+// --- User State (derived from points_ledger + family_settings) ---
 
 export function useUserState() {
   const { data: pts } = useChildPoints();
   const { data: settings } = useFamilySettings();
-  const { data: config } = useFamilyConfig();
 
   const combined = pts && settings ? {
     totalPoints: pts.points,
     totalEarnedLifetime: pts.lifetime_points,
     parentEmail: settings.primary_parent_email,
     secondaryParentEmail: settings.secondary_parent_email,
-    allowanceEnabled: config?.allowance_enabled ?? false,
-    pointsPerDollar: config?.points_per_dollar ?? 600,
     dailySummaryEnabled: settings.daily_summary_enabled ?? false,
     dailySummaryTimeLocal: settings.daily_summary_time_local ?? "19:30",
     dailySummaryTimezone: settings.timezone ?? "America/Denver",
@@ -444,34 +434,48 @@ export function useUserState() {
   return { data: combined, isLoading: !pts || !settings };
 }
 
-// --- Config (for Parent Panel catalog — frontend constants for now) ---
+// --- Config (for Parent Panel catalog management) ---
 
 export function useConfig() {
-  const { data: config } = useFamilyConfig();
+  const { data: chores } = useChoreCatalog();
+  const { data: rewards } = useRewardCatalog();
 
-  const mapped = config ? {
-    enabledChores: config.enabled_chores as Record<string, boolean>,
-    enabledRewards: config.enabled_rewards as Record<string, boolean>,
-    pointsByChoreId: config.points_by_chore_id as Record<string, number>,
-    costByRewardId: config.cost_by_reward_id as Record<string, number>,
-    allowanceEnabled: config.allowance_enabled,
-    pointsPerDollar: config.points_per_dollar,
+  const mapped = chores && rewards ? {
+    enabledChores: Object.fromEntries(chores.map(c => [c.id, c.active])),
+    enabledRewards: Object.fromEntries(rewards.map(r => [r.id, r.active])),
+    pointsByChoreId: Object.fromEntries(chores.map(c => [c.id, c.points])),
+    costByRewardId: Object.fromEntries(rewards.map(r => [r.id, r.cost])),
+    choreCatalog: chores,
+    rewardCatalog: rewards,
   } : undefined;
 
-  return { data: mapped, isLoading: !config };
+  return { data: mapped, isLoading: !chores || !rewards };
 }
+
+// --- Update Chore Config (toggle active, update points) ---
 
 export function useUpdateChoreConfig() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async (_data: { enabledChores: Record<string, boolean>; pointsByChoreId: Record<string, number> }) => {
-      // Phase 2: persist to family_config key/value store
-      // For now, catalog config is frontend-only defaults
+    mutationFn: async (data: { enabledChores: Record<string, boolean>; pointsByChoreId: Record<string, number> }) => {
+      const updates = Object.entries(data.enabledChores).map(([id, active]) => {
+        const points = data.pointsByChoreId[id];
+        return supabase
+          .from("chore_catalog")
+          .update({ active, ...(points !== undefined ? { points } : {}) })
+          .eq("id", id);
+      });
+
+      const results = await Promise.all(updates);
+      const errors = results.filter(r => r.error);
+      if (errors.length > 0) {
+        throw new Error(errors[0].error!.message);
+      }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["family_config"] });
+      queryClient.invalidateQueries({ queryKey: ["chore_catalog"] });
       queryClient.invalidateQueries({ queryKey: ["chores"] });
       toast({ title: "Chore settings saved!" });
     },
@@ -481,17 +485,30 @@ export function useUpdateChoreConfig() {
   });
 }
 
+// --- Update Reward Config (toggle active, update cost) ---
+
 export function useUpdateRewardConfig() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async (_data: { enabledRewards: Record<string, boolean>; costByRewardId: Record<string, number> }) => {
-      // Phase 2: persist to family_config key/value store
-      // For now, catalog config is frontend-only defaults
+    mutationFn: async (data: { enabledRewards: Record<string, boolean>; costByRewardId: Record<string, number> }) => {
+      const updates = Object.entries(data.enabledRewards).map(([id, active]) => {
+        const cost = data.costByRewardId[id];
+        return supabase
+          .from("reward_catalog")
+          .update({ active, ...(cost !== undefined ? { cost } : {}) })
+          .eq("id", id);
+      });
+
+      const results = await Promise.all(updates);
+      const errors = results.filter(r => r.error);
+      if (errors.length > 0) {
+        throw new Error(errors[0].error!.message);
+      }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["family_config"] });
+      queryClient.invalidateQueries({ queryKey: ["reward_catalog"] });
       queryClient.invalidateQueries({ queryKey: ["rewards"] });
       toast({ title: "Reward settings saved!" });
     },
@@ -501,13 +518,15 @@ export function useUpdateRewardConfig() {
   });
 }
 
+// --- Update Settings (family_settings) ---
+
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { family } = useAuth();
 
   return useMutation({
-    mutationFn: async (settings: { parentEmail?: string | null; secondaryParentEmail?: string | null; allowanceEnabled?: boolean; pointsPerDollar?: number; dailySummaryEnabled?: boolean; dailySummaryTimeLocal?: string; dailySummaryTimezone?: string }) => {
+    mutationFn: async (settings: { parentEmail?: string | null; secondaryParentEmail?: string | null; dailySummaryEnabled?: boolean; dailySummaryTimeLocal?: string; dailySummaryTimezone?: string }) => {
       if (!family) throw new Error("No family");
 
       const updateData: any = {};
@@ -587,47 +606,29 @@ async function checkAndAwardBadges(childId: string, lifetimePoints: number) {
   return newBadges;
 }
 
-// --- Bonus ---
+// --- Bonus (via RPC) ---
 
 export function useAwardBonus() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { activeChildId, family } = useAuth();
+  const { activeChildId } = useAuth();
 
   return useMutation({
     mutationFn: async (data: { reason: string; points: number; note?: string }) => {
-      if (!activeChildId || !family) throw new Error("No child selected");
+      if (!activeChildId) throw new Error("No child selected");
 
-      const p = clampNumber(data.points, 1, 5000);
-
-      await supabase.rpc("increment_child_points", {
+      const { data: result, error } = await supabase.rpc("grant_bonus", {
         p_child_id: activeChildId,
-        p_delta: p,
-        p_add_lifetime: true,
+        p_points: data.points,
+        p_reason: data.reason,
       });
 
-      const { data: event } = await supabase
-        .from("ledger_events")
-        .insert({
-          family_id: family.familyId,
-          child_id: activeChildId,
-          type: "bonus_award",
-          ref_id: data.reason,
-          points_delta: p,
-          note: data.note || null,
-        })
-        .select()
-        .single();
+      if (error) throw error;
+      if (result?.error) throw new Error(result.error);
 
-      const { data: pts } = await supabase
-        .from("child_points")
-        .select("lifetime_points")
-        .eq("child_id", activeChildId)
-        .single();
+      const newBadges = await checkAndAwardBadges(activeChildId, result.new_total || 0);
 
-      const newBadges = await checkAndAwardBadges(activeChildId, pts?.lifetime_points || 0);
-
-      return { event, pointsDelta: p, newBadges };
+      return { pointsDelta: data.points, newBadges, newTotal: result.new_total };
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["child_points"] });
@@ -660,10 +661,10 @@ export function useLedger() {
     enabled: !!activeChildId,
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("ledger_events")
+        .from("points_ledger")
         .select("*")
         .eq("child_id", activeChildId!)
-        .order("occurred_at", { ascending: false })
+        .order("created_at", { ascending: false })
         .limit(100);
       if (error) throw error;
       return data;
@@ -694,74 +695,77 @@ export interface FamilySummary {
 
 export function useFamilySummary(date?: string) {
   const { family, children: kids } = useAuth();
-  const { data: config } = useFamilyConfig();
+  const { data: catalog } = useChoreCatalog();
 
   return useQuery<FamilySummary | null>({
     queryKey: ["family_summary", family?.familyId, date],
-    enabled: !!family && !!config && kids.length > 0,
+    enabled: !!family && !!catalog && kids.length > 0,
     queryFn: async () => {
-      if (!family || !config || kids.length === 0) return null;
+      if (!family || !catalog || kids.length === 0) return null;
 
       const today = date || localDateKey(new Date());
-      const startOfDay = `${today}T00:00:00.000Z`;
-      const endOfDay = `${today}T23:59:59.999Z`;
-
-      const enabledMap = (config.enabled_chores as Record<string, boolean>) || {};
-      const allChores = flattenCatalog(CATALOG.chores);
+      const activeChores = catalog.filter(c => c.active);
 
       const childSummaries: ChildDailySummary[] = [];
 
       for (const kid of kids) {
-        const [eventsRes, dailyRes, pointsRes, purchasesRes] = await Promise.all([
+        const [ledgerRes, dailyRes, pointsRes, redemptionsRes] = await Promise.all([
           supabase
-            .from("ledger_events")
+            .from("points_ledger")
             .select("*")
             .eq("child_id", kid.id)
-            .gte("occurred_at", startOfDay)
-            .lte("occurred_at", endOfDay)
-            .order("occurred_at"),
+            .eq("date_key", today)
+            .order("created_at"),
           supabase
             .from("daily_status")
-            .select("completed_chores")
+            .select("completed_chore_ids")
             .eq("child_id", kid.id)
             .eq("date_key", today)
             .single(),
           supabase
-            .from("child_points")
-            .select("points")
-            .eq("child_id", kid.id)
-            .single(),
+            .from("points_ledger")
+            .select("points_delta")
+            .eq("child_id", kid.id),
           supabase
-            .from("purchases")
-            .select("reward_name, cost")
+            .from("reward_redemptions")
+            .select("cost, reward_catalog(name)")
             .eq("child_id", kid.id)
-            .gte("purchased_at", startOfDay)
-            .lte("purchased_at", endOfDay),
+            .gte("created_at", `${today}T00:00:00.000Z`)
+            .lte("created_at", `${today}T23:59:59.999Z`),
         ]);
 
-        const completedMap = (dailyRes.data?.completed_chores as Record<string, boolean>) || {};
+        const completedIds = new Set<string>(
+          (dailyRes.data?.completed_chore_ids as string[]) || []
+        );
+
         const completedChores: string[] = [];
         const missedChores: string[] = [];
-        allChores.forEach(c => {
-          if (!enabledMap[c.id]) return;
-          if (completedMap[c.id]) {
+        activeChores.forEach(c => {
+          if (completedIds.has(c.id)) {
             completedChores.push(c.name);
           } else {
             missedChores.push(c.name);
           }
         });
 
-        const eventsArr = eventsRes.data || [];
-        const bonuses = eventsArr
-          .filter((e: any) => e.type === "bonus_award")
-          .map((e: any) => ({ reason: e.ref_id, points: e.points_delta, note: e.note }));
+        const ledgerArr = ledgerRes.data || [];
+        const bonuses = ledgerArr
+          .filter((e: any) => e.event_type === "bonus")
+          .map((e: any) => ({
+            reason: e.meta?.reason || "Bonus",
+            points: e.points_delta,
+            note: e.meta?.note || null,
+          }));
 
-        const redemptions = (purchasesRes.data || []).map((p: any) => ({
-          name: p.reward_name,
-          cost: p.cost,
+        const redemptions = (redemptionsRes.data || []).map((r: any) => ({
+          name: r.reward_catalog?.name || "Unknown",
+          cost: r.cost,
         }));
 
-        const pointsEarnedToday = eventsArr.reduce((sum: number, e: any) => sum + e.points_delta, 0);
+        const pointsEarnedToday = ledgerArr.reduce((sum: number, e: any) => sum + e.points_delta, 0);
+
+        const allPoints = pointsRes.data || [];
+        const currentBalance = allPoints.reduce((sum: number, r: any) => sum + r.points_delta, 0);
 
         childSummaries.push({
           childName: kid.displayName,
@@ -770,7 +774,7 @@ export function useFamilySummary(date?: string) {
           bonuses,
           redemptions,
           pointsEarnedToday,
-          currentBalance: pointsRes.data?.points || 0,
+          currentBalance,
         });
       }
 

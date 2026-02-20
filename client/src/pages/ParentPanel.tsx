@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import {
-  useUserState, useUpdateSettings, useConfig,
+  useUserState, useUpdateSettings,
   useUpdateChoreConfig, useUpdateRewardConfig,
   useAwardBonus, useDailySummary, useSendSummaryEmail,
+  useChoreCatalog, useRewardCatalog,
 } from "@/hooks/use-data";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
@@ -13,8 +14,8 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
-  Shield, Mail, Send, Settings, Star,
-  ChevronDown, ChevronUp, Loader2, DollarSign,
+  Mail, Settings, Star,
+  ChevronDown, ChevronUp, Loader2,
   CheckSquare, ShoppingBag, UserPlus, LogOut, Users,
   Clock, Globe, Zap,
 } from "lucide-react";
@@ -112,7 +113,7 @@ function BonusSection() {
 }
 
 function ChoreConfigSection() {
-  const { data: config } = useConfig();
+  const { data: catalog } = useChoreCatalog();
   const updateChores = useUpdateChoreConfig();
   const [localEnabled, setLocalEnabled] = useState<Record<string, boolean>>({});
   const [localPoints, setLocalPoints] = useState<Record<string, number>>({});
@@ -120,12 +121,18 @@ function ChoreConfigSection() {
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    if (config && !initialized) {
-      setLocalEnabled(config.enabledChores || {});
-      setLocalPoints(config.pointsByChoreId || {});
+    if (catalog && catalog.length > 0 && !initialized) {
+      const enabled: Record<string, boolean> = {};
+      const points: Record<string, number> = {};
+      catalog.forEach(c => {
+        enabled[c.id] = c.active;
+        points[c.id] = c.points;
+      });
+      setLocalEnabled(enabled);
+      setLocalPoints(points);
       setInitialized(true);
     }
-  }, [config, initialized]);
+  }, [catalog, initialized]);
 
   const handleSave = () => {
     updateChores.mutate({ enabledChores: localEnabled, pointsByChoreId: localPoints });
@@ -139,6 +146,10 @@ function ChoreConfigSection() {
     setLocalPoints(prev => ({ ...prev, [id]: Math.max(0, Math.min(999999, pts)) }));
   };
 
+  const categories = catalog
+    ? Array.from(new Set(catalog.map(c => c.category)))
+    : [];
+
   return (
     <Card className="p-5">
       <h3 className="font-display font-bold text-lg mb-2 flex items-center gap-2">
@@ -148,23 +159,24 @@ function ChoreConfigSection() {
       <p className="text-sm text-muted-foreground mb-4">Toggle chores on/off and set custom point values.</p>
 
       <div className="space-y-2 mb-4">
-        {CATALOG.chores.map(cat => {
-          const isExpanded = expandedCat === cat.categoryId;
-          const enabledCount = cat.items.filter(i => localEnabled[i.id]).length;
+        {categories.map(catName => {
+          const items = catalog!.filter(c => c.category === catName);
+          const isExpanded = expandedCat === catName;
+          const enabledCount = items.filter(i => localEnabled[i.id]).length;
           return (
-            <div key={cat.categoryId} className="border rounded-xl overflow-hidden">
+            <div key={catName} className="border rounded-xl overflow-hidden">
               <button
-                onClick={() => setExpandedCat(isExpanded ? null : cat.categoryId)}
+                onClick={() => setExpandedCat(isExpanded ? null : catName)}
                 className="w-full flex items-center justify-between p-4 text-left font-bold"
-                data-testid={`button-chore-cat-${cat.categoryId}`}
+                data-testid={`button-chore-cat-${catName}`}
               >
-                <span>{cat.categoryName} ({enabledCount}/{cat.items.length})</span>
+                <span>{catName} ({enabledCount}/{items.length})</span>
                 {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
               </button>
 
               {isExpanded && (
                 <div className="border-t px-4 pb-3 space-y-3">
-                  {cat.items.map(item => (
+                  {items.map(item => (
                     <div key={item.id} className="flex items-center justify-between py-2 gap-3">
                       <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
                         <input
@@ -186,7 +198,7 @@ function ChoreConfigSection() {
                           type="number"
                           min="1"
                           max="999999"
-                          value={localPoints[item.id] ?? item.defaultPoints}
+                          value={localPoints[item.id] ?? item.points}
                           onChange={(e) => setItemPoints(item.id, parseInt(e.target.value) || 0)}
                           className="w-16 p-1.5 rounded-lg border bg-background text-foreground font-mono text-sm text-center"
                           data-testid={`input-chore-points-${item.id}`}
@@ -216,8 +228,7 @@ function ChoreConfigSection() {
 }
 
 function RewardConfigSection() {
-  const { data: config } = useConfig();
-  const { data: userState } = useUserState();
+  const { data: catalog } = useRewardCatalog();
   const updateRewards = useUpdateRewardConfig();
   const [localEnabled, setLocalEnabled] = useState<Record<string, boolean>>({});
   const [localCosts, setLocalCosts] = useState<Record<string, number>>({});
@@ -225,12 +236,18 @@ function RewardConfigSection() {
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    if (config && !initialized) {
-      setLocalEnabled(config.enabledRewards || {});
-      setLocalCosts(config.costByRewardId || {});
+    if (catalog && catalog.length > 0 && !initialized) {
+      const enabled: Record<string, boolean> = {};
+      const costs: Record<string, number> = {};
+      catalog.forEach(r => {
+        enabled[r.id] = r.active;
+        costs[r.id] = r.cost;
+      });
+      setLocalEnabled(enabled);
+      setLocalCosts(costs);
       setInitialized(true);
     }
-  }, [config, initialized]);
+  }, [catalog, initialized]);
 
   const handleSave = () => {
     updateRewards.mutate({ enabledRewards: localEnabled, costByRewardId: localCosts });
@@ -244,10 +261,9 @@ function RewardConfigSection() {
     setLocalCosts(prev => ({ ...prev, [id]: Math.max(0, Math.min(999999, cost)) }));
   };
 
-  const filteredCategories = CATALOG.rewards.filter(cat => {
-    if (cat.categoryId === "allowance" && !userState?.allowanceEnabled) return false;
-    return true;
-  });
+  const categories = catalog
+    ? Array.from(new Set(catalog.map(r => r.category)))
+    : [];
 
   return (
     <Card className="p-5">
@@ -258,63 +274,54 @@ function RewardConfigSection() {
       <p className="text-sm text-muted-foreground mb-4">Toggle rewards on/off and set custom costs.</p>
 
       <div className="space-y-2 mb-4">
-        {filteredCategories.map(cat => {
-          const isExpanded = expandedCat === cat.categoryId;
-          const enabledCount = cat.items.filter(i => localEnabled[i.id]).length;
+        {categories.map(catName => {
+          const items = catalog!.filter(r => r.category === catName);
+          const isExpanded = expandedCat === catName;
+          const enabledCount = items.filter(i => localEnabled[i.id]).length;
           return (
-            <div key={cat.categoryId} className="border rounded-xl overflow-hidden">
+            <div key={catName} className="border rounded-xl overflow-hidden">
               <button
-                onClick={() => setExpandedCat(isExpanded ? null : cat.categoryId)}
+                onClick={() => setExpandedCat(isExpanded ? null : catName)}
                 className="w-full flex items-center justify-between p-4 text-left font-bold"
-                data-testid={`button-reward-cat-${cat.categoryId}`}
+                data-testid={`button-reward-cat-${catName}`}
               >
-                <span>{cat.categoryName} ({enabledCount}/{cat.items.length})</span>
+                <span>{catName} ({enabledCount}/{items.length})</span>
                 {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
               </button>
 
               {isExpanded && (
                 <div className="border-t px-4 pb-3 space-y-3">
-                  {cat.items.map(item => {
-                    const isAllowance = item.id.startsWith("allow_");
-                    return (
-                      <div key={item.id} className="flex items-center justify-between py-2 gap-3">
-                        <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={!!localEnabled[item.id]}
-                            onChange={() => toggleItem(item.id)}
-                            className="w-5 h-5 rounded accent-secondary shrink-0"
-                            data-testid={`checkbox-reward-${item.id}`}
-                          />
-                          <span className={cn(
-                            "font-medium text-sm truncate",
-                            localEnabled[item.id] ? "text-foreground" : "text-muted-foreground"
-                          )}>
-                            {item.name}
-                          </span>
-                        </label>
-                        {!isAllowance && (
-                          <div className="flex items-center gap-1 shrink-0">
-                            <input
-                              type="number"
-                              min="1"
-                              max="999999"
-                              value={localCosts[item.id] ?? item.defaultCost}
-                              onChange={(e) => setItemCost(item.id, parseInt(e.target.value) || 0)}
-                              className="w-20 p-1.5 rounded-lg border bg-background text-foreground font-mono text-sm text-center"
-                              data-testid={`input-reward-cost-${item.id}`}
-                            />
-                            <span className="text-xs text-muted-foreground">pts</span>
-                          </div>
-                        )}
-                        {isAllowance && (
-                          <span className="text-xs text-muted-foreground font-mono">
-                            auto
-                          </span>
-                        )}
+                  {items.map(item => (
+                    <div key={item.id} className="flex items-center justify-between py-2 gap-3">
+                      <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!!localEnabled[item.id]}
+                          onChange={() => toggleItem(item.id)}
+                          className="w-5 h-5 rounded accent-secondary shrink-0"
+                          data-testid={`checkbox-reward-${item.id}`}
+                        />
+                        <span className={cn(
+                          "font-medium text-sm truncate",
+                          localEnabled[item.id] ? "text-foreground" : "text-muted-foreground"
+                        )}>
+                          {item.name}
+                        </span>
+                      </label>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <input
+                          type="number"
+                          min="1"
+                          max="999999"
+                          value={localCosts[item.id] ?? item.cost}
+                          onChange={(e) => setItemCost(item.id, parseInt(e.target.value) || 0)}
+                          className="w-20 p-1.5 rounded-lg border bg-background text-foreground font-mono text-sm text-center"
+                          data-testid={`input-reward-cost-${item.id}`}
+                        />
+                        <span className="text-xs text-muted-foreground">pts</span>
                       </div>
-                    );
-                  })}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -372,8 +379,6 @@ function SettingsSection() {
   const updateSettings = useUpdateSettings();
   const [email, setEmail] = useState("");
   const [secondaryEmail, setSecondaryEmail] = useState("");
-  const [allowance, setAllowance] = useState(false);
-  const [pointsPerDollar, setPointsPerDollar] = useState(600);
   const [summaryEnabled, setSummaryEnabled] = useState(false);
   const [summaryTime, setSummaryTime] = useState("18:00");
   const [summaryTimezone, setSummaryTimezone] = useState(detectTimezone());
@@ -382,13 +387,11 @@ function SettingsSection() {
     if (userState) {
       setEmail(userState.parentEmail || user?.email || "");
       setSecondaryEmail(userState.secondaryParentEmail || "");
-      setAllowance(userState.allowanceEnabled);
-      setPointsPerDollar(userState.pointsPerDollar);
       setSummaryEnabled(userState.dailySummaryEnabled);
       setSummaryTime(userState.dailySummaryTimeLocal);
       setSummaryTimezone(userState.dailySummaryTimezone);
     }
-  }, [userState?.parentEmail, userState?.secondaryParentEmail, userState?.allowanceEnabled, userState?.pointsPerDollar, userState?.dailySummaryEnabled, userState?.dailySummaryTimeLocal, userState?.dailySummaryTimezone, user?.email]);
+  }, [userState?.parentEmail, userState?.secondaryParentEmail, userState?.dailySummaryEnabled, userState?.dailySummaryTimeLocal, userState?.dailySummaryTimezone, user?.email]);
 
   const emailsMatch = !!(email.trim() && secondaryEmail.trim() && email.trim().toLowerCase() === secondaryEmail.trim().toLowerCase());
 
@@ -397,8 +400,6 @@ function SettingsSection() {
     updateSettings.mutate({
       parentEmail: email.trim() || null,
       secondaryParentEmail: secondaryEmail.trim() || null,
-      allowanceEnabled: allowance,
-      pointsPerDollar,
       dailySummaryEnabled: summaryEnabled,
       dailySummaryTimeLocal: summaryTime,
       dailySummaryTimezone: summaryTimezone,
@@ -498,44 +499,6 @@ function SettingsSection() {
                 )}
               </select>
             </div>
-          </div>
-        )}
-
-        <div className="flex items-center justify-between gap-2 p-3 rounded-xl border">
-          <div>
-            <p className="font-bold text-sm">Allowance Mode</p>
-            <p className="text-xs text-muted-foreground">Let kids convert points to money</p>
-          </div>
-          <button
-            onClick={() => setAllowance(!allowance)}
-            className={cn(
-              "w-12 h-7 rounded-full transition-all relative shrink-0",
-              allowance ? "bg-green-500" : "bg-muted"
-            )}
-            data-testid="button-toggle-allowance"
-          >
-            <div className={cn(
-              "w-5 h-5 bg-white rounded-full absolute top-1 transition-all shadow",
-              allowance ? "left-6" : "left-1"
-            )} />
-          </button>
-        </div>
-
-        {allowance && (
-          <div>
-            <label className="text-sm font-bold text-muted-foreground mb-1 block">
-              <DollarSign className="w-4 h-4 inline" /> Points per $1 (currently {pointsPerDollar})
-            </label>
-            <input
-              type="range"
-              min="50"
-              max="5000"
-              step="50"
-              value={pointsPerDollar}
-              onChange={(e) => setPointsPerDollar(parseInt(e.target.value))}
-              className="w-full accent-primary"
-              data-testid="input-points-per-dollar"
-            />
           </div>
         )}
 
@@ -663,37 +626,17 @@ function ChildManagementSection() {
 
   const handleAddChild = async () => {
     if (!newChildName.trim() || !family) return;
-    if (newChildPin && newChildPin.length !== 4) {
-      setAddError("PIN must be exactly 4 digits");
-      return;
-    }
     setIsAdding(true);
     setAddError("");
 
     try {
-      const baseData: any = {
-        family_id: family.familyId,
-        display_name: newChildName.trim(),
-      };
+      const { data, error } = await supabase.rpc("add_child", {
+        p_display_name: newChildName.trim(),
+      });
 
-      if (newChildPin) {
-        const { error: pinErr } = await supabase
-          .from("children")
-          .insert({ ...baseData, pin_hash: newChildPin });
-
-        if (pinErr) {
-          console.warn("[parent-panel] Insert with pin_hash failed, retrying without:", pinErr);
-          const { error: fallbackErr } = await supabase
-            .from("children")
-            .insert(baseData);
-          if (fallbackErr) throw fallbackErr;
-        }
-      } else {
-        const { error } = await supabase
-          .from("children")
-          .insert(baseData);
-        if (error) throw error;
-      }
+      if (error) throw error;
+      const result = typeof data === "string" ? JSON.parse(data) : data;
+      if (result?.error) throw new Error(result.error);
 
       await refreshChildren();
       setNewChildName("");
