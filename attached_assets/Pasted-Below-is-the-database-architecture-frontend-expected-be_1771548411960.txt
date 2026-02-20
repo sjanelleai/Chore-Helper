@@ -1,0 +1,217 @@
+Below is the database architecture + frontend expected behavior for Chore Helper using Supabase, written so you can hand it directly to your developer. It’s intentionally explicit about “what must exist” and “what the UI must do,” but it’s not prescriptive about exact code structure.
+
+⸻
+
+Chore Helper — Supabase Database Architecture + Frontend Contract
+
+1) Core identity model (Parent + multiple kids per family)
+
+Tables (source of truth)
+	1.	auth.users (Supabase-managed)
+
+	•	One row per authenticated parent user.
+	•	Contains id (uuid) and email.
+
+	2.	public.families
+
+	•	Purpose: A household / parent account container.
+	•	Key fields:
+	•	id uuid PK
+	•	created_by uuid (FK → auth.users.id) — the original parent/creator
+	•	name text (optional)
+	•	timestamps
+
+	3.	public.family_members
+
+	•	Purpose: Many-to-many link between authenticated users and families.
+	•	Key fields:
+	•	id uuid PK (or composite key if you prefer)
+	•	family_id uuid (FK → families.id)
+	•	user_id uuid (FK → auth.users.id)
+	•	role text (ex: parent, admin, viewer)
+	•	timestamps
+	•	Constraint expectation:
+	•	Unique (family_id, user_id) to prevent duplicates.
+
+	4.	public.children
+
+	•	Purpose: Kid profiles (non-authenticated) under a family.
+	•	Key fields:
+	•	id uuid PK
+	•	family_id uuid (FK → families.id)
+	•	display_name text
+	•	timestamps
+	•	Optional future fields:
+	•	avatar, color, birth_year, etc.
+
+	5.	public.family_settings
+
+	•	Purpose: Settings tied to a family (parent emails, summary schedule, timezone).
+	•	Key fields:
+	•	family_id uuid PK (FK → families.id)
+	•	primary_parent_email text
+	•	secondary_parent_email text
+	•	daily_summary_enabled bool
+	•	daily_summary_time_local text (or time) e.g., "19:30"
+	•	timezone text e.g., "America/Denver"
+	•	timestamps
+	•	Expectation:
+	•	1 row per family (create if missing).
+
+	6.	public.email_send_log
+
+	•	Purpose: Prevent duplicate sends + audit nightly summary delivery.
+	•	Key fields:
+	•	family_id uuid (FK → families.id) (recommended as primary identifier)
+	•	date_key date (the local date in family timezone)
+	•	status text (sent / failed)
+	•	error text nullable
+	•	timestamps
+	•	Constraint expectation:
+	•	Unique (family_id, date_key).
+
+Note: You also have public.family_config as a key/value JSON table. The recommended stance is:
+	•	Do not use it for identity/membership
+	•	Only keep if it stores legacy config/feature flags
+	•	Long-term: migrate off it into structured tables like family_settings
+
+⸻
+
+2) Critical backend behavior (must be deterministic)
+
+“Ensure family exists” requirement
+
+Your UI should not “poll and hope” the family appears. On parent login / Parent Zone load, the system must ensure:
+	•	a families row exists for the parent
+	•	a family_members row exists linking auth.uid() → families.id
+	•	a family_settings row exists for that family
+
+This should be done in one server-side action (RPC or server endpoint) to avoid RLS timing issues and to prevent the “Setting up…” loop.
+
+Recommended server primitive
+
+Create an RPC like:
+	•	ensure_family_for_user() → returns { family_id }
+
+Expected logic (conceptual):
+	1.	Look up family_members where user_id = auth.uid()
+	2.	If found → return that family_id
+	3.	If not found:
+	•	insert into families (created_by, name)
+	•	insert into family_members (family_id, user_id, role='parent')
+	•	insert into family_settings (family_id, primary_parent_email = auth.users.email) if desired
+	4.	Return { family_id }
+
+This is the #1 fix for the “Setting up your family profile” banner.
+
+⸻
+
+3) Frontend expected behavior (contract)
+
+On successful signup/login
+	1.	Frontend gets the authenticated user: user.id, user.email
+	2.	Frontend calls ensure_family_for_user()
+	3.	Frontend stores family_id in app state
+	4.	Frontend loads:
+	•	family_settings by family_id
+	•	children by family_id
+
+No retries/polling unless you have a hard error reason.
+If ensure_family_for_user() fails → show an actionable error (not “try again”).
+
+⸻
+
+4) Parent Zone behavior
+
+Parent Settings screen
+
+Reads
+	•	family_settings by family_id
+
+Writes
+	•	Update family_settings fields:
+	•	primary_parent_email (default to signup email if empty)
+	•	secondary_parent_email
+	•	daily summary enabled/time/timezone
+
+Validation rules
+	•	Trim + lowercase emails on save
+	•	Primary != Secondary
+	•	If primary is blank, default it to auth.users.email on first creation (server-side preferred)
+
+⸻
+
+5) Add Child behavior (this is the failing feature today)
+
+Preconditions before enabling “Add Child”
+	•	UI must already have a valid family_id from ensure_family_for_user()
+
+On Add Child click
+
+Frontend must:
+	1.	Insert row into children:
+	•	family_id
+	•	display_name
+	2.	Re-fetch children list (or optimistically update local state)
+
+Required result
+	•	New child appears in UI immediately
+	•	No dependency on family_config
+
+Error handling expectation
+
+If insert fails, UI must show:
+	•	Supabase error code/message/details/hint
+	•	Not just “try again”
+
+⸻
+
+6) RLS / Security expectations (high-level)
+
+You can implement security via:
+	•	RLS policies on tables for client-side operations, OR
+	•	RPC functions (security definer) that perform inserts/updates safely
+
+For beta speed and simplicity, the usual pattern is:
+	•	RLS enabled for reads scoped to family membership
+	•	Writes either:
+	•	allowed via RLS for members, or
+	•	forced through RPC for complex multi-table operations (recommended for ensure-family)
+
+At minimum, the developer must ensure:
+	•	a logged-in parent can read/write their own family’s children + family_settings
+	•	a parent cannot access other families’ data
+
+⸻
+
+7) QA checklist your dev should follow (end-to-end)
+
+When testing with a brand-new parent user:
+	1.	Signup → login
+	2.	Confirm the following rows exist:
+	•	families: 1 row with created_by = auth.user.id
+	•	family_members: 1 row linking user to family
+	•	family_settings: 1 row for family
+	3.	Add Child:
+	•	inserts into children with correct family_id
+	4.	Reload app:
+	•	Parent Zone loads instantly (no “Setting up…” loop)
+	•	Children list reappears
+
+If the “Setting up…” loop persists, dev must capture:
+	•	Network calls during that screen
+	•	The exact Supabase error object
+	•	Whether family_members row exists for the user
+
+⸻
+
+8) Recommendation about family_config
+
+Given your current model, the simplest future-proof approach is:
+	•	Use family_settings for all settings
+	•	Use families/family_members/children for identity & membership
+	•	Leave family_config for legacy or remove later
+
+⸻
+
+If you want, paste your current “Parent Zone setup” flow (just the sequence of calls it makes), and I’ll tell you exactly where it diverges from this contract (the exact place the loop is being created).
