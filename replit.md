@@ -114,8 +114,15 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - Duplicate email validation: UI prevents primary == secondary (case-insensitive, trimmed)
 - Save button disabled when emails match
 
+## Navigation Layout
+- **Responsive persistent navigation** via AppLayout wrapper in App.tsx
+- **Mobile** (< 768px): Fixed bottom navigation bar with 5 tabs (Home, Chores, Store, Badges, Parent)
+- **Desktop** (>= 768px): Shadcn Sidebar (collapsible="none") on the left side with same 5 nav items
+- Navigation wraps only authenticated pages (not Login, Signup, SelectChild, AuthCallback, AuthReset)
+- Pages use `max-w-md md:max-w-2xl` for responsive content width
+- `client/src/components/Navigation.tsx` exports AppLayout (layout wrapper) and Navigation (legacy compat)
+
 ## User Preferences
 - Kid-friendly, gamified UI with fun fonts and bright colors
 - Confetti animation on chore completion
-- Bottom navigation bar (5 tabs)
 - Mobile-first responsive design

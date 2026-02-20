@@ -4,6 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
+import { AppLayout } from "@/components/Navigation";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
 import Chores from "@/pages/Chores";
@@ -58,18 +59,20 @@ function Router() {
         <Route path="/auth/reset" component={AuthReset} />
         <Route path="/select-child" component={SelectChild} />
         <Route path="/">
-          <ChildGuard><Home /></ChildGuard>
+          <ChildGuard><AppLayout><Home /></AppLayout></ChildGuard>
         </Route>
         <Route path="/chores">
-          <ChildGuard><Chores /></ChildGuard>
+          <ChildGuard><AppLayout><Chores /></AppLayout></ChildGuard>
         </Route>
         <Route path="/rewards">
-          <ChildGuard><Rewards /></ChildGuard>
+          <ChildGuard><AppLayout><Rewards /></AppLayout></ChildGuard>
         </Route>
         <Route path="/badges">
-          <ChildGuard><Badges /></ChildGuard>
+          <ChildGuard><AppLayout><Badges /></AppLayout></ChildGuard>
         </Route>
-        <Route path="/parent" component={ParentPanel} />
+        <Route path="/parent">
+          <AppLayout><ParentPanel /></AppLayout>
+        </Route>
         <Route component={NotFound} />
       </Switch>
     </AuthGuard>

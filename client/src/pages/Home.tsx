@@ -2,7 +2,6 @@ import { Link } from "wouter";
 import { useUserState, useChores, useResetChores } from "@/hooks/use-data";
 import { useAuth } from "@/lib/auth-context";
 import { PointsDisplay } from "@/components/PointsDisplay";
-import { Navigation } from "@/components/Navigation";
 import { motion } from "framer-motion";
 import { CheckSquare, ShoppingBag, RotateCcw, Shield, Users } from "lucide-react";
 
@@ -25,8 +24,8 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-background pb-24">
-      <div className="max-w-md mx-auto pt-8 px-4">
+    <div className="min-h-screen bg-background">
+      <div className="max-w-md md:max-w-2xl mx-auto pt-8 px-4">
         <div className="flex items-center justify-between gap-2 mb-8 flex-wrap">
           <div>
             <h1 className="text-3xl font-display font-bold text-foreground" data-testid="text-greeting">
@@ -131,7 +130,6 @@ export default function Home() {
           </div>
         </div>
       </div>
-      <Navigation />
     </div>
   );
 }

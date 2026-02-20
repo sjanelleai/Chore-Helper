@@ -7,7 +7,6 @@ import {
 } from "@/hooks/use-data";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
-import { Navigation } from "@/components/Navigation";
 import { Header } from "@/components/Header";
 import { CATALOG } from "@shared/catalog";
 import { Card } from "@/components/ui/card";
@@ -746,10 +745,10 @@ export default function ParentPanel() {
   const { activeChild } = useAuth();
 
   return (
-    <div className="min-h-screen bg-background pb-24">
+    <div className="min-h-screen bg-background">
       <Header title="Parent Zone" />
 
-      <div className="max-w-md mx-auto px-4 pt-6 space-y-6">
+      <div className="max-w-md md:max-w-2xl mx-auto px-4 pt-6 space-y-6">
         {activeChild && (
           <div className="bg-primary/5 border border-primary/20 rounded-xl p-3 text-center">
             <p className="text-sm text-muted-foreground">Managing</p>
@@ -763,7 +762,6 @@ export default function ParentPanel() {
         <SummarySection />
         <SettingsSection />
       </div>
-      <Navigation />
     </div>
   );
 }

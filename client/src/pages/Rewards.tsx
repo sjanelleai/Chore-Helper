@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useRewards, useUserState, useRedeemReward } from "@/hooks/use-data";
 import { RewardCard } from "@/components/RewardCard";
-import { Navigation } from "@/components/Navigation";
 import { Header } from "@/components/Header";
 import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -19,10 +18,10 @@ export default function Rewards() {
     : rewards?.filter(r => r.category === selectedCategory);
 
   return (
-    <div className="min-h-screen bg-background pb-24">
+    <div className="min-h-screen bg-background">
       <Header title="Reward Store" showPoints={true} />
 
-      <div className="max-w-md mx-auto px-4 pt-6">
+      <div className="max-w-md md:max-w-2xl mx-auto px-4 pt-6">
         <div className="bg-secondary/10 border border-secondary/20 rounded-2xl p-6 mb-6 text-center">
           <p className="text-sm font-bold text-secondary uppercase tracking-wider mb-1" data-testid="text-balance-label">Current Balance</p>
           <p className="text-4xl font-black font-mono text-foreground" data-testid="text-balance-value">{user?.totalPoints || 0} pts</p>
@@ -86,7 +85,6 @@ export default function Rewards() {
           </div>
         )}
       </div>
-      <Navigation />
     </div>
   );
 }

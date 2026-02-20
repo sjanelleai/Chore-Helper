@@ -1,5 +1,4 @@
 import { useBadges, usePurchases } from "@/hooks/use-data";
-import { Navigation } from "@/components/Navigation";
 import { Header } from "@/components/Header";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -30,10 +29,10 @@ export default function Badges() {
   const earnedBadges = badges?.filter(b => b.earned) || [];
 
   return (
-    <div className="min-h-screen bg-background pb-24">
+    <div className="min-h-screen bg-background">
       <Header title="My Achievements" />
 
-      <div className="max-w-md mx-auto px-4 pt-6 space-y-8">
+      <div className="max-w-md md:max-w-2xl mx-auto px-4 pt-6 space-y-8">
         
         <section>
           <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
@@ -120,7 +119,6 @@ export default function Badges() {
         </section>
 
       </div>
-      <Navigation />
     </div>
   );
 }

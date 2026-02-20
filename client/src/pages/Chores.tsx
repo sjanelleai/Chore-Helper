@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useChores, useToggleChore } from "@/hooks/use-data";
 import { ChoreCard } from "@/components/ChoreCard";
-import { Navigation } from "@/components/Navigation";
 import { Header } from "@/components/Header";
 import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -20,10 +19,10 @@ export default function Chores() {
   filteredChores?.sort((a, b) => Number(a.completed) - Number(b.completed));
 
   return (
-    <div className="min-h-screen bg-background pb-24">
+    <div className="min-h-screen bg-background">
       <Header title="My Checklist" />
 
-      <div className="max-w-md mx-auto px-4 pt-6">
+      <div className="max-w-md md:max-w-2xl mx-auto px-4 pt-6">
         <div className="flex gap-2 overflow-x-auto pb-4 mb-4 scrollbar-hide">
           <button
             onClick={() => setFilter('all')}
@@ -82,7 +81,6 @@ export default function Chores() {
           )}
         </div>
       </div>
-      <Navigation />
     </div>
   );
 }
