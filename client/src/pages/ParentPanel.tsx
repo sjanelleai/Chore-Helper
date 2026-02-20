@@ -671,20 +671,29 @@ function ChildManagementSection() {
     setAddError("");
 
     try {
-      const insertData: any = {
+      const baseData: any = {
         family_id: family.familyId,
-        name: newChildName.trim(),
+        display_name: newChildName.trim(),
       };
 
       if (newChildPin) {
-        insertData.pin_hash = newChildPin;
+        const { error: pinErr } = await supabase
+          .from("children")
+          .insert({ ...baseData, pin_hash: newChildPin });
+
+        if (pinErr) {
+          console.warn("[parent-panel] Insert with pin_hash failed, retrying without:", pinErr);
+          const { error: fallbackErr } = await supabase
+            .from("children")
+            .insert(baseData);
+          if (fallbackErr) throw fallbackErr;
+        }
+      } else {
+        const { error } = await supabase
+          .from("children")
+          .insert(baseData);
+        if (error) throw error;
       }
-
-      const { error } = await supabase
-        .from("children")
-        .insert(insertData);
-
-      if (error) throw error;
 
       await refreshChildren();
       setNewChildName("");
