@@ -211,7 +211,7 @@ export function useChores() {
       const today = localDateKey(new Date());
 
       const { data: dailyRows } = await supabase
-        .from("daily_status")
+        .from("daily_status_v2")
         .select("chore_id, completed")
         .eq("child_id", activeChildId)
         .eq("date_key", today);
@@ -296,7 +296,7 @@ export function useResetChores() {
       const today = localDateKey(new Date());
 
       const { error } = await supabase
-        .from("daily_status")
+        .from("daily_status_v2")
         .delete()
         .eq("child_id", activeChildId)
         .eq("date_key", today);
@@ -695,7 +695,7 @@ export function useFamilySummary(date?: string) {
             .lte("created_at", `${today}T23:59:59.999Z`)
             .order("created_at"),
           supabase
-            .from("daily_status")
+            .from("daily_status_v2")
             .select("chore_id, completed")
             .eq("child_id", kid.id)
             .eq("date_key", today),

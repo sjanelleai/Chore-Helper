@@ -15,7 +15,9 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 ## Supabase Setup
 - **Original setup script**: `supabase-setup.sql` — original schema with old table names (parent_profiles, family_config). Reference only.
 - **Migration v2**: `supabase-migration-v2.sql` — updates RPCs and RLS for the current schema (family_members, family_settings, children.display_name). Run this AFTER the original setup.
-- **Migration v3**: `supabase-migration-v3.sql` — adds database-backed catalogs (chore_catalog, reward_catalog), points_ledger, reward_redemptions, recreated daily_status, and RPCs (add_child, toggle_chore, redeem_reward, grant_bonus, seed_default_catalog). Run AFTER v2.
+- **Migration v3**: `supabase-migration-v3.sql` — adds database-backed catalogs (chore_catalog, reward_catalog), points_ledger, reward_redemptions, daily_status (legacy array-based), and RPCs. Run AFTER v2.
+- **Migration v4**: `supabase-migration-v4.sql` — adds email_send_log table, remove_child RPC, performance indexes. Run AFTER v3.
+- **Migration v5**: `supabase-migration-v5.sql` — **CRITICAL alignment fix**: creates daily_status_v2 (per-chore-row model), adds title column to catalog tables, rewrites toggle_chore RPC with points_ledger writes. Run AFTER v4.
 
 ## Auth Flow
 1. Parent signs up with email + 6-digit PIN → Supabase Auth creates user
@@ -42,14 +44,15 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 ### Catalog (Database-backed)
 | Table | Purpose |
 |---|---|
-| `chore_catalog` | Per-family chore definitions (category, name, points, active, sort_order) |
-| `reward_catalog` | Per-family reward definitions (category, name, cost, requires_approval, active, sort_order) |
+| `chore_catalog` | Per-family chore definitions (category, name, title, points, active, sort_order). Frontend uses `title` column. |
+| `reward_catalog` | Per-family reward definitions (category, name, title, cost, requires_approval, active, sort_order). Frontend uses `title` column. |
 
 ### Activity & History
 | Table | Purpose |
 |---|---|
 | `points_ledger` | Point audit trail — all point changes (chore, unchore, bonus, purchase). Child points derived from SUM of points_delta. |
-| `daily_status` | Per-child per-day chore completion tracking (completed_chore_ids uuid[], composite PK on child_id + date_key) |
+| `daily_status_v2` | Per-chore per-day completion tracking (child_id, chore_id, date_key, completed). PK on (child_id, chore_id, date_key). |
+| `daily_status` | **LEGACY** — old array-based model (completed_chore_ids uuid[]). Kept for reference, NOT used by frontend. |
 | `reward_redemptions` | Reward redemption history (child_id, reward_id, cost, status) |
 | `child_badges` | Earned achievement badges |
 
@@ -66,11 +69,11 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `ensure_family_exists(p_display_name)` - Creates family + family_members + family_settings if missing. Called as fallback on login.
 - `current_family_id()` - Helper used by RLS policies. Reads from `family_members`.
 - `add_child(p_display_name)` - Creates a child in the caller's family.
-- `toggle_chore(p_child_id, p_chore_id, p_date_key)` - Toggles chore completion, writes to daily_status + points_ledger atomically.
+- `toggle_chore(p_child_id, p_chore_id, p_date_key)` - Toggles chore completion via daily_status_v2 (insert row = completed, delete row = uncompleted) + writes to points_ledger atomically.
 - `redeem_reward(p_child_id, p_reward_id)` - Redeems reward, checks balance, writes to reward_redemptions + points_ledger atomically.
 - `grant_bonus(p_child_id, p_points, p_reason)` - Awards bonus points, writes to points_ledger.
 - `seed_default_catalog(p_family_id)` - Seeds chore_catalog + reward_catalog from STARTER constants if empty. Called automatically by frontend hooks.
-- `remove_child(p_child_id)` - Deletes a child and all associated data (daily_status, points_ledger, reward_redemptions, child_badges). Only callable by family members.
+- `remove_child(p_child_id)` - Deletes a child and all associated data (daily_status_v2, daily_status, points_ledger, reward_redemptions, child_badges). Only callable by family members.
 
 ## Key Pages
 - `/login` - Parent sign in (email + 6-digit PIN)
@@ -94,6 +97,7 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `supabase-migration-v2.sql` - Updated RPCs for family_members/family_settings schema
 - `supabase-migration-v3.sql` - Database-backed catalogs, points_ledger, RPCs
 - `supabase-migration-v4.sql` - email_send_log table, remove_child RPC, recommended indexes
+- `supabase-migration-v5.sql` - CRITICAL: daily_status_v2 (per-chore-row), catalog title columns, rewritten toggle_chore RPC
 - `client/src/lib/supabase.ts` - Supabase client configuration
 - `client/src/lib/auth-context.tsx` - Auth provider with session management + ensure_family_exists fallback
 - `client/src/hooks/use-data.ts` - All data hooks (Supabase queries/mutations via RPCs)

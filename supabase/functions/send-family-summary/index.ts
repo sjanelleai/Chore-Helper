@@ -71,7 +71,7 @@ Deno.serve(async (req) => {
     const choreMap = new Map((allChores || []).map((c) => [c.id, c.title]));
 
     const { data: dailyStatuses } = await supabase
-      .from("daily_status")
+      .from("daily_status_v2")
       .select("child_id, chore_id, completed")
       .eq("date_key", date_key)
       .in("child_id", childIds);
@@ -118,21 +118,14 @@ Deno.serve(async (req) => {
     const childSummaries: ChildSummary[] = children.map((child) => {
       const statuses = (dailyStatuses || []).filter((s) => s.child_id === child.id);
 
+      const completedChoreIds = new Set(statuses.map((s) => s.chore_id));
       const completedChores: string[] = [];
       const missedChores: string[] = [];
 
-      for (const s of statuses) {
-        const title = choreMap.get(s.chore_id) || "Unknown chore";
-        if (s.completed) {
+      for (const [choreId, title] of choreMap) {
+        if (completedChoreIds.has(choreId)) {
           completedChores.push(title);
         } else {
-          missedChores.push(title);
-        }
-      }
-
-      const activeChoreIds = new Set(statuses.map((s) => s.chore_id));
-      for (const [choreId, title] of choreMap) {
-        if (!activeChoreIds.has(choreId)) {
           missedChores.push(title);
         }
       }

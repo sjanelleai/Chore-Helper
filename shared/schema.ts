@@ -69,7 +69,5 @@ export interface DailyStatusRow {
   chore_id: string;
   date_key: string;
   completed: boolean;
-  completed_at: string | null;
   created_at: string;
-  updated_at: string;
 }
