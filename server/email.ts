@@ -16,18 +16,30 @@ async function getCredentials() {
     throw new Error('X_REPLIT_TOKEN not found for repl/depl');
   }
 
-  connectionSettings = await fetch(
-    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=sendgrid',
-    {
-      headers: {
-        'Accept': 'application/json',
-        'X_REPLIT_TOKEN': xReplitToken
-      }
-    }
-  ).then(res => res.json()).then(data => data.items?.[0]);
+  if (!hostname) {
+    throw new Error('REPLIT_CONNECTORS_HOSTNAME not set');
+  }
 
-  if (!connectionSettings || (!connectionSettings.settings.api_key || !connectionSettings.settings.from_email)) {
-    throw new Error('SendGrid not connected');
+  const url = 'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=sendgrid';
+  const response = await fetch(url, {
+    headers: {
+      'Accept': 'application/json',
+      'X_REPLIT_TOKEN': xReplitToken
+    }
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    console.error(`SendGrid connector fetch failed: ${response.status} ${response.statusText}`, body);
+    throw new Error(`SendGrid connector request failed (${response.status}): ${body || response.statusText}`);
+  }
+
+  const data = await response.json();
+  connectionSettings = data.items?.[0];
+
+  if (!connectionSettings || (!connectionSettings.settings?.api_key || !connectionSettings.settings?.from_email)) {
+    console.error('SendGrid connector response:', JSON.stringify(data, null, 2));
+    throw new Error('SendGrid not connected — missing api_key or from_email in connector settings');
   }
   return { apiKey: connectionSettings.settings.api_key, email: connectionSettings.settings.from_email };
 }
@@ -179,14 +191,24 @@ export async function sendFamilySummaryEmail(toEmails: string[], summary: Family
   const { client, fromEmail } = await getUncachableSendGridClient();
   const { subject, html } = formatFamilySummaryEmail(summary);
 
-  const sendPromises = toEmails.map(email =>
-    client.send({
-      to: email,
-      from: fromEmail,
-      subject,
-      html,
-    })
-  );
+  try {
+    const sendPromises = toEmails.map(email =>
+      client.send({
+        to: email,
+        from: fromEmail,
+        subject,
+        html,
+      })
+    );
 
-  await Promise.all(sendPromises);
+    await Promise.all(sendPromises);
+  } catch (err: any) {
+    if (err?.response?.body?.errors) {
+      const sgErrors = err.response.body.errors;
+      console.error('SendGrid API errors:', JSON.stringify(sgErrors, null, 2));
+      const messages = sgErrors.map((e: any) => e.message).join('; ');
+      throw new Error(`SendGrid: ${messages}`);
+    }
+    throw err;
+  }
 }

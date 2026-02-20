@@ -41,8 +41,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (e instanceof z.ZodError) {
         return res.status(400).json({ message: e.errors[0].message });
       }
-      console.error("Email send error:", e.message);
-      res.status(400).json({ message: e.message || "Failed to send email" });
+      console.error("Email send error:", e);
+      res.status(500).json({ message: e.message || "Failed to send email" });
     }
   });
 

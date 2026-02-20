@@ -1,0 +1,67 @@
+“Forbidden” here is almost always Supabase auth/permissions (401/403) — not SendGrid itself. It means the request your app is making to send the summary email is hitting something that requires a role/key the browser doesn’t have, or it’s blocked by CORS / RLS / function JWT settings.
+
+What your developer should check (in this order)
+
+1) Which endpoint is being called when you click “Send test daily summary”
+In the browser DevTools → Network:
+	•	Find the failing request
+	•	Confirm if it’s calling:
+	•	a Supabase Edge Function: /functions/v1/...
+	•	a Replit server route: /api/... or similar
+	•	the Supabase REST endpoint (PostgREST): /rest/v1/...
+
+Expected: browser should call either:
+	•	your Replit backend route (recommended) OR
+	•	a Supabase Edge Function that allows authenticated users
+
+2) If it’s a Supabase Edge Function: it’s probably requiring the wrong JWT
+In Supabase Edge Functions you can toggle JWT verification.
+	•	If JWT verification is ON, the browser request must include a valid Supabase user Authorization: Bearer <access_token>.
+	•	If your frontend isn’t attaching it, you’ll get Forbidden.
+
+Fix: ensure the request uses the active session token:
+	•	supabase.auth.getSession() then include Authorization: Bearer session.access_token
+
+3) If it’s calling a Replit server route: your backend is likely rejecting it
+Common causes:
+	•	Missing auth header forwarded from client
+	•	Backend expects a secret/service key (and browser is not allowed to have it)
+	•	Backend checks an allowlist and is blocking the request
+
+Fix: the backend route should validate the user via Supabase auth token, then perform email send server-side.
+
+4) If it’s hitting Supabase REST tables (family_settings / children / etc.)
+403 could be RLS blocking the read needed to build the email.
+Example: your “send email” code does:
+	•	read family_settings or children or daily_status
+	•	but policy doesn’t allow it in the execution context being used
+
+Fix: either:
+	•	make sure the email-send is done in an Edge Function / backend using the service role for reads, OR
+	•	expand RLS policies appropriately (usually not ideal for email sending)
+
+5) CORS (less likely but possible)
+If the function returns 403 due to CORS misconfig, you’ll see it in the response headers / console.
+
+⸻
+
+What “correct” looks like (simple contract)
+	•	Frontend button calls: POST /api/send-daily-summary-test
+	•	Backend does:
+	1.	Verify Supabase user from bearer token
+	2.	Look up family_id and recipients (family_settings)
+	3.	Generate summary data
+	4.	Send email via SendGrid using server-side key
+	5.	Return { ok: true }
+
+⸻
+
+One concrete thing to hand your developer
+
+Have them capture and paste these 4 items from the failed request (no extra commentary):
+	1.	Request URL
+	2.	Response status (403) + response body
+	3.	Request headers: specifically whether Authorization: Bearer ... is present
+	4.	Which code path triggered it (ParentPanel button handler file + function name)
+
+That’s enough to pinpoint exactly which of the 4 buckets it’s in.
