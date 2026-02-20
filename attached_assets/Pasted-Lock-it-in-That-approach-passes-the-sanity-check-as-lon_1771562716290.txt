@@ -1,0 +1,192 @@
+Lock it in. That approach passes the sanity check as long as you treat Supabase as the contract and refactor frontend to match it exactly, and you stop “papering over” schema mismatches with defensive fallbacks that hide real errors.
+
+Below is the developer handoff describing exactly what to change and what “done” looks like.
+
+⸻
+
+1) Core rule: stop using legacy assumptions
+
+Remove/replace everywhere in frontend:
+	•	children.name → children.display_name
+	•	families.owner_user_id → families.created_by
+	•	chore_catalog.name → chore_catalog.title
+	•	reward_catalog.name → reward_catalog.title
+	•	reward_catalog.requires_approval → reward_catalog.requires_parent_approval
+	•	daily_status.completed_chore_ids array model → per-chore row model
+	•	points_ledger.meta → points_ledger.note
+	•	points_ledger.date_key → does not exist
+	•	reward_redemptions.updated_at → does not exist
+
+Any one of these left behind will cause the exact “schema cache” errors you’re seeing.
+
+⸻
+
+2) Types: update shared/schema.ts (or equivalent)
+
+Implement a single source of truth for row types that matches Supabase columns.
+
+Required interface updates
+	•	ChoreCatalogRow
+	•	title: string (not name)
+	•	RewardCatalogRow
+	•	title: string (not name)
+	•	requires_parent_approval: boolean (not requires_approval)
+	•	DailyStatusRow
+	•	{ child_id: uuid; chore_id: uuid; date_key: string; completed: boolean }
+	•	PointsLedgerRow
+	•	remove date_key, remove meta
+	•	add ref_type: string, ref_id?: uuid | null, note?: string | null
+	•	RewardRedemptionRow
+	•	remove updated_at
+
+⸻
+
+3) Data layer: refactor use-data.ts to match schema + RPC contracts
+
+A) Catalog reads
+
+Replace any remaining frontend constants usage as the primary UI source.
+	•	useChoreCatalog(family_id) → select from chore_catalog where family_id and active=true
+	•	useRewardCatalog(family_id) → select from reward_catalog where family_id and active=true
+
+B) Daily status read (biggest change)
+
+Old: one record/day with completed_chore_ids[]
+New: one row per chore/day
+
+Implement:
+	•	useDailyStatus(child_id, date_key) → select rows from daily_status where child_id and date_key
+	•	In UI: build a Set(chore_id) from returned rows (or map chore_id -> completed)
+
+C) Toggle chore
+
+Update useToggleChore() to expect:
+	•	RPC returns { ok: boolean, completed: boolean }
+Stop expecting { was_completed, points_delta, ... }.
+
+After mutation, invalidate/refetch:
+	•	daily_status query for that child/date
+	•	points total
+
+D) Points total
+
+Points are derived:
+	•	select sum(points_delta) from points_ledger where child_id = X
+
+Stop reading child_points or expecting ledger payload to return totals.
+
+E) Reward redemption
+
+Update useRedeemReward() to expect:
+	•	{ ok: boolean, redemption_id: uuid }
+Invalidate/refetch:
+	•	reward_redemptions for child
+	•	points total
+
+F) Grant bonus
+
+Update to send p_note (not p_reason).
+Expect minimal { ok: true }. Refetch points.
+
+G) Reset chores
+
+If you have a “reset day” feature, it must delete daily_status rows for (child_id, date_key) (or call an RPC that does it). No array fields exist anymore.
+
+H) Family summary
+
+Where summary logic used:
+	•	daily_status rows + chore_catalog join
+	•	ledger uses note, not meta
+
+I) Redemptions join display
+
+Use reward_catalog.title not .name.
+
+⸻
+
+4) Auth bootstrap: auth-context.tsx
+
+Required behavior
+
+On session load:
+	1.	Determine family membership
+	2.	If missing, call ensure_family_exists()
+	3.	Then load:
+	•	children (display_name)
+	•	family_settings
+	•	chore_catalog / reward_catalog
+
+Fix
+	•	Any references to families.owner_user_id must become families.created_by.
+	•	Family identity comes from family_members for the current user, not old profile tables.
+
+Critical UX requirement
+
+If ensure_family_exists fails:
+	•	surface the exact error in UI and console
+	•	do not loop with “Setting up… try again”
+
+⸻
+
+5) Pages: replace catalog .name with .title
+
+Update every renderer:
+	•	ParentPanel chore/reward management
+	•	Badges / Rewards views
+	•	Summary
+	•	Any dropdowns/selectors
+
+Also fix the second add-child path:
+	•	ParentPanel’s “Add Kid” must insert display_name or call add_child RPC
+	•	No inserts should ever send { name: ... } to children
+
+⸻
+
+6) “Why chores/rewards disappeared” (what dev must check)
+
+This occurs when the UI previously rendered from frontend constants, but after refactor it now reads from DB and catalog tables are empty.
+
+Frontend must:
+	•	detect empty catalog for the family
+	•	call seed_default_catalog(family_id) once
+	•	refetch and render
+
+⸻
+
+7) Navigation: persistent menu on every route
+
+Deliverable
+
+Implement an AppShell layout that wraps every route.
+	•	Mobile: bottom nav fixed
+	•	Desktop: left side nav fixed
+	•	Content renders inside shell (Outlet pattern)
+
+No page should render “full-screen” without the shell.
+
+⸻
+
+8) What you need to run in Supabase
+
+Only if these are missing in your project:
+	•	chore_catalog, reward_catalog, daily_status (per-chore PK), points_ledger, reward_redemptions
+	•	RPCs: ensure_family_exists, seed_default_catalog, add_child, toggle_chore, redeem_reward, grant_bonus
+	•	RLS policies aligned to is_family_member(family_id)
+
+There is no “connect databases” query. If tables/RPCs exist, nothing else is needed outside Supabase/Replit.
+
+⸻
+
+9) Definition of done (QA checklist)
+	•	New parent signup → lands in app → family exists → settings row exists
+	•	Add Kid works repeatedly (multiple children)
+	•	Chores list appears (seeded if empty)
+	•	Toggling a chore:
+	•	updates daily_status row
+	•	updates points via ledger sum
+	•	Rewards show (seeded if empty)
+	•	Redeem reward writes redemption + negative ledger
+	•	Parent settings save to family_settings and persist
+	•	Navigation stays visible everywhere (bottom on mobile, side on desktop)
+
+⸻

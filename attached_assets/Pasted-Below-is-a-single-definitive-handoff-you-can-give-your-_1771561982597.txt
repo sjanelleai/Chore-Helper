@@ -1,0 +1,635 @@
+Below is a single, definitive handoff you can give your developer, plus the full SQL you can run in Supabase to (1) align RPCs/helpers to your audited schema and (2) migrate chores + rewards into Supabase so they show up again.
+
+⸻
+
+Frontend direction (menu always visible)
+
+Goal
+
+Navigation is always present:
+	•	Mobile: bottom tab bar (fixed)
+	•	Desktop: left sidebar (fixed)
+
+Expected behavior
+	•	Nav remains visible across all routes (Parent Zone, Kids, Chores, Rewards, Badges, Settings, etc.).
+	•	Content area has padding so it never hides behind the fixed nav.
+
+Implementation pattern (React)
+	•	App layout component wraps all pages:
+	•	<AppShell> renders:
+	•	<SidebarNav /> (desktop via CSS media query / responsive classes)
+	•	<BottomNav /> (mobile)
+	•	<main> content container
+	•	All routes render inside <AppShell> so menu is always on screen.
+	•	Desktop: sidebar width reserved (e.g., 240px).
+	•	Mobile: bottom bar height reserved (e.g., 64px).
+
+⸻
+
+“HomeQuest — Schema Migration v2” (corrected to your real Supabase schema)
+
+Your audited schema says:
+	•	families.created_by (NOT owner_user_id)
+	•	membership is family_members (NOT parent_profiles)
+	•	settings are family_settings (NOT family_config)
+	•	child name is children.display_name (NOT children.name)
+	•	RLS helpers rely on is_family_member(family_id) in policies
+
+So the v2 RPCs must be implemented against:
+	•	families(id, created_by, name, created_at, updated_at)
+	•	family_members(family_id, user_id, role, ...)
+	•	family_settings(family_id, primary_parent_email, secondary_parent_email, daily_summary_*, timezone, ...)
+
+⸻
+
+Full SQL to run in Supabase (one pass)
+
+This script:
+	1.	Drops only the RPCs that commonly conflict (like add_child) without touching is_family_member (so you don’t have to CASCADE-drop policies).
+	2.	Recreates helper + RPCs aligned to audited schema.
+	3.	Creates Supabase-backed catalogs for chores and rewards (so they show again).
+	4.	Adds the seeding RPC seed_default_catalog(family_id) you can call once per family (or auto-call from frontend when catalogs are empty).
+	5.	Creates core activity tables needed for “toggle chore / points / redeem reward”.
+
+Paste into Supabase Dashboard → SQL Editor → New Query → Run.
+
+-- ============================================================
+-- HomeQuest — Supabase Migration (Schema + Catalog + RPCs)
+-- Aligns frontend to audited schema + moves chores/rewards to DB
+-- SAFE to re-run (idempotent patterns used where possible)
+-- ============================================================
+
+-- ============================================================
+-- 0) DROP only conflicting RPCs (avoid dropping is_family_member)
+-- ============================================================
+-- Note: The "cannot change return type" error happens when an existing
+-- function has the same signature but different RETURNS type.
+-- We drop the common ones that change during iterations.
+
+DROP FUNCTION IF EXISTS public.add_child(text);
+DROP FUNCTION IF EXISTS public.ensure_family_exists(text);
+DROP FUNCTION IF EXISTS public.current_family_id();
+DROP FUNCTION IF EXISTS public.seed_default_catalog(uuid);
+DROP FUNCTION IF EXISTS public.toggle_chore(uuid, uuid, date);
+DROP FUNCTION IF EXISTS public.redeem_reward(uuid, uuid);
+DROP FUNCTION IF EXISTS public.grant_bonus(uuid, int, text);
+
+-- ============================================================
+-- 1) HELPER: current_family_id() — based on family_members
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.current_family_id()
+RETURNS uuid
+LANGUAGE sql STABLE
+SECURITY DEFINER
+AS $$
+  SELECT fm.family_id
+  FROM public.family_members fm
+  WHERE fm.user_id = auth.uid()
+  LIMIT 1
+$$;
+
+GRANT EXECUTE ON FUNCTION public.current_family_id() TO authenticated;
+
+-- ============================================================
+-- 2) RPC: ensure_family_exists — create family + membership + settings
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.ensure_family_exists(p_display_name text DEFAULT 'Parent')
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_user_id uuid;
+  v_family_id uuid;
+  v_existing_family_id uuid;
+  v_user_email text;
+  v_family_name text;
+BEGIN
+  v_user_id := auth.uid();
+  IF v_user_id IS NULL THEN
+    RETURN json_build_object('error', 'Not authenticated');
+  END IF;
+
+  -- Fast path: already a member of a family
+  SELECT fm.family_id INTO v_existing_family_id
+  FROM public.family_members fm
+  WHERE fm.user_id = v_user_id
+  LIMIT 1;
+
+  IF v_existing_family_id IS NOT NULL THEN
+    SELECT f.name INTO v_family_name
+    FROM public.families f
+    WHERE f.id = v_existing_family_id;
+
+    RETURN json_build_object(
+      'family_id', v_existing_family_id,
+      'display_name', COALESCE(v_family_name, p_display_name)
+    );
+  END IF;
+
+  -- Slow path: create everything
+  SELECT u.email INTO v_user_email
+  FROM auth.users u
+  WHERE u.id = v_user_id;
+
+  INSERT INTO public.families (created_by, name)
+  VALUES (v_user_id, COALESCE(p_display_name, 'My Family'))
+  RETURNING id INTO v_family_id;
+
+  INSERT INTO public.family_members (family_id, user_id, role)
+  VALUES (v_family_id, v_user_id, 'parent')
+  ON CONFLICT DO NOTHING;
+
+  INSERT INTO public.family_settings (family_id, primary_parent_email)
+  VALUES (v_family_id, v_user_email)
+  ON CONFLICT (family_id) DO NOTHING;
+
+  RETURN json_build_object(
+    'family_id', v_family_id,
+    'display_name', COALESCE(p_display_name, 'Parent')
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.ensure_family_exists(text) TO authenticated;
+
+-- ============================================================
+-- 3) TABLES: Chores + Rewards catalogs (per family)
+-- ============================================================
+
+-- updated_at trigger helper (shared)
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
+-- Chore catalog
+CREATE TABLE IF NOT EXISTS public.chore_catalog (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  family_id uuid NOT NULL REFERENCES public.families(id) ON DELETE CASCADE,
+  category text NOT NULL,
+  title text NOT NULL,
+  points int NOT NULL DEFAULT 10,
+  sort_order int NOT NULL DEFAULT 0,
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT chore_catalog_unique UNIQUE (family_id, category, title)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_chore_catalog_updated_at'
+  ) THEN
+    CREATE TRIGGER trg_chore_catalog_updated_at
+    BEFORE UPDATE ON public.chore_catalog
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_chore_catalog_family ON public.chore_catalog (family_id);
+CREATE INDEX IF NOT EXISTS idx_chore_catalog_family_active ON public.chore_catalog (family_id, active);
+CREATE INDEX IF NOT EXISTS idx_chore_catalog_family_cat_sort ON public.chore_catalog (family_id, category, sort_order);
+
+-- Reward catalog
+CREATE TABLE IF NOT EXISTS public.reward_catalog (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  family_id uuid NOT NULL REFERENCES public.families(id) ON DELETE CASCADE,
+  category text NOT NULL,
+  title text NOT NULL,
+  cost int NOT NULL,
+  requires_parent_approval boolean NOT NULL DEFAULT true,
+  active boolean NOT NULL DEFAULT true,
+  sort_order int NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT reward_catalog_unique UNIQUE (family_id, category, title)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_reward_catalog_updated_at'
+  ) THEN
+    CREATE TRIGGER trg_reward_catalog_updated_at
+    BEFORE UPDATE ON public.reward_catalog
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_reward_catalog_family ON public.reward_catalog (family_id);
+CREATE INDEX IF NOT EXISTS idx_reward_catalog_family_active ON public.reward_catalog (family_id, active);
+CREATE INDEX IF NOT EXISTS idx_reward_catalog_family_cat_sort ON public.reward_catalog (family_id, category, sort_order);
+
+-- ============================================================
+-- 4) TABLES: Daily status + ledger + redemptions
+-- ============================================================
+
+-- Daily status: one row per (child, chore, day)
+CREATE TABLE IF NOT EXISTS public.daily_status (
+  child_id uuid NOT NULL REFERENCES public.children(id) ON DELETE CASCADE,
+  chore_id uuid NOT NULL REFERENCES public.chore_catalog(id) ON DELETE CASCADE,
+  date_key date NOT NULL,
+  completed boolean NOT NULL DEFAULT false,
+  completed_at timestamptz NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (child_id, chore_id, date_key)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_daily_status_updated_at'
+  ) THEN
+    CREATE TRIGGER trg_daily_status_updated_at
+    BEFORE UPDATE ON public.daily_status
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_daily_status_child_date ON public.daily_status (child_id, date_key);
+CREATE INDEX IF NOT EXISTS idx_daily_status_chore_date ON public.daily_status (chore_id, date_key);
+
+-- Points ledger
+CREATE TABLE IF NOT EXISTS public.points_ledger (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  family_id uuid NOT NULL REFERENCES public.families(id) ON DELETE CASCADE,
+  child_id uuid NOT NULL REFERENCES public.children(id) ON DELETE CASCADE,
+  event_type text NOT NULL,
+  points_delta int NOT NULL,
+  ref_type text NULL,
+  ref_id uuid NULL,
+  note text NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_points_ledger_child_created ON public.points_ledger (child_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_points_ledger_family_created ON public.points_ledger (family_id, created_at DESC);
+
+-- Reward redemptions
+CREATE TABLE IF NOT EXISTS public.reward_redemptions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  family_id uuid NOT NULL REFERENCES public.families(id) ON DELETE CASCADE,
+  child_id uuid NOT NULL REFERENCES public.children(id) ON DELETE CASCADE,
+  reward_id uuid NOT NULL REFERENCES public.reward_catalog(id) ON DELETE CASCADE,
+  cost int NOT NULL,
+  status text NOT NULL DEFAULT 'redeemed',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_reward_redemptions_child_created ON public.reward_redemptions (child_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reward_redemptions_family_created ON public.reward_redemptions (family_id, created_at DESC);
+
+-- ============================================================
+-- 5) RPC: add_child (uses children.display_name)
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.add_child(p_display_name text)
+RETURNS public.children
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_family_id uuid;
+  v_child public.children;
+BEGIN
+  v_family_id := public.current_family_id();
+  IF v_family_id IS NULL THEN
+    RAISE EXCEPTION 'No family for current user';
+  END IF;
+
+  INSERT INTO public.children (family_id, display_name)
+  VALUES (v_family_id, trim(p_display_name))
+  RETURNING * INTO v_child;
+
+  RETURN v_child;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.add_child(text) TO authenticated;
+
+-- ============================================================
+-- 6) RPC: seed_default_catalog(family_id)
+--     Inserts chores/rewards only if empty for that family.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.seed_default_catalog(p_family_id uuid)
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_has_chores boolean;
+  v_has_rewards boolean;
+  v_chores_added int := 0;
+  v_rewards_added int := 0;
+BEGIN
+  -- Require membership (uses your existing policies/function assumptions)
+  IF NOT EXISTS (
+    SELECT 1 FROM public.family_members fm
+    WHERE fm.family_id = p_family_id AND fm.user_id = auth.uid()
+  ) THEN
+    RETURN json_build_object('error', 'Not authorized');
+  END IF;
+
+  SELECT EXISTS (SELECT 1 FROM public.chore_catalog WHERE family_id = p_family_id) INTO v_has_chores;
+  SELECT EXISTS (SELECT 1 FROM public.reward_catalog WHERE family_id = p_family_id) INTO v_has_rewards;
+
+  IF NOT v_has_chores THEN
+    INSERT INTO public.chore_catalog (family_id, category, title, points, sort_order)
+    VALUES
+      (p_family_id, 'Morning', 'Get dressed', 10, 10),
+      (p_family_id, 'Morning', 'Brush teeth', 10, 20),
+      (p_family_id, 'Morning', 'Make bed', 10, 30),
+      (p_family_id, 'After School', 'Homework time', 15, 10),
+      (p_family_id, 'After School', 'Put backpack away', 10, 20),
+      (p_family_id, 'Evening', 'Clean up toys', 10, 10),
+      (p_family_id, 'Evening', 'Shower / bath', 10, 20),
+      (p_family_id, 'Evening', 'Read 15 minutes', 15, 30);
+    GET DIAGNOSTICS v_chores_added = ROW_COUNT;
+  END IF;
+
+  IF NOT v_has_rewards THEN
+    INSERT INTO public.reward_catalog (family_id, category, title, cost, requires_parent_approval, sort_order)
+    VALUES
+      (p_family_id, 'Small', 'Pick the family dessert', 50, true, 10),
+      (p_family_id, 'Small', 'Extra 15 minutes screen time', 75, true, 20),
+      (p_family_id, 'Medium', 'Choose a movie night', 150, true, 10),
+      (p_family_id, 'Medium', 'Pick dinner spot (kid choice)', 200, true, 20),
+      (p_family_id, 'Big', 'New toy (parent-approved)', 500, true, 10);
+    GET DIAGNOSTICS v_rewards_added = ROW_COUNT;
+  END IF;
+
+  RETURN json_build_object(
+    'seeded', (NOT v_has_chores) OR (NOT v_has_rewards),
+    'chores_added', v_chores_added,
+    'rewards_added', v_rewards_added
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.seed_default_catalog(uuid) TO authenticated;
+
+-- ============================================================
+-- 7) RPC: toggle_chore(child, chore, date) + ledger entry
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.toggle_chore(p_child_id uuid, p_chore_id uuid, p_date_key date)
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_family_id uuid;
+  v_points int;
+  v_completed boolean;
+BEGIN
+  -- Resolve family via child
+  SELECT c.family_id INTO v_family_id
+  FROM public.children c
+  WHERE c.id = p_child_id;
+
+  IF v_family_id IS NULL THEN
+    RETURN json_build_object('error', 'Child not found');
+  END IF;
+
+  -- Require membership
+  IF NOT EXISTS (
+    SELECT 1 FROM public.family_members fm
+    WHERE fm.family_id = v_family_id AND fm.user_id = auth.uid()
+  ) THEN
+    RETURN json_build_object('error', 'Not authorized');
+  END IF;
+
+  SELECT cc.points INTO v_points
+  FROM public.chore_catalog cc
+  WHERE cc.id = p_chore_id AND cc.family_id = v_family_id;
+
+  IF v_points IS NULL THEN
+    RETURN json_build_object('error', 'Chore not found');
+  END IF;
+
+  -- Upsert daily_status row and flip completion
+  INSERT INTO public.daily_status (child_id, chore_id, date_key, completed, completed_at)
+  VALUES (p_child_id, p_chore_id, p_date_key, true, now())
+  ON CONFLICT (child_id, chore_id, date_key)
+  DO UPDATE SET
+    completed = NOT public.daily_status.completed,
+    completed_at = CASE WHEN public.daily_status.completed = false THEN now() ELSE NULL END
+  RETURNING completed INTO v_completed;
+
+  -- Ledger delta
+  INSERT INTO public.points_ledger (family_id, child_id, event_type, points_delta, ref_type, ref_id)
+  VALUES (
+    v_family_id,
+    p_child_id,
+    CASE WHEN v_completed THEN 'chore_complete' ELSE 'chore_uncomplete' END,
+    CASE WHEN v_completed THEN v_points ELSE -v_points END,
+    'chore',
+    p_chore_id
+  );
+
+  RETURN json_build_object('ok', true, 'completed', v_completed);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.toggle_chore(uuid, uuid, date) TO authenticated;
+
+-- ============================================================
+-- 8) RPC: redeem_reward(child, reward) + ledger entry + redemption record
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.redeem_reward(p_child_id uuid, p_reward_id uuid)
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_family_id uuid;
+  v_cost int;
+  v_total int;
+  v_redemption_id uuid;
+BEGIN
+  SELECT c.family_id INTO v_family_id
+  FROM public.children c
+  WHERE c.id = p_child_id;
+
+  IF v_family_id IS NULL THEN
+    RETURN json_build_object('error', 'Child not found');
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.family_members fm
+    WHERE fm.family_id = v_family_id AND fm.user_id = auth.uid()
+  ) THEN
+    RETURN json_build_object('error', 'Not authorized');
+  END IF;
+
+  SELECT rc.cost INTO v_cost
+  FROM public.reward_catalog rc
+  WHERE rc.id = p_reward_id AND rc.family_id = v_family_id;
+
+  IF v_cost IS NULL THEN
+    RETURN json_build_object('error', 'Reward not found');
+  END IF;
+
+  SELECT COALESCE(SUM(pl.points_delta), 0) INTO v_total
+  FROM public.points_ledger pl
+  WHERE pl.child_id = p_child_id;
+
+  IF v_total < v_cost THEN
+    RETURN json_build_object('error', 'Insufficient points', 'total', v_total, 'cost', v_cost);
+  END IF;
+
+  INSERT INTO public.reward_redemptions (family_id, child_id, reward_id, cost, status)
+  VALUES (v_family_id, p_child_id, p_reward_id, v_cost, 'redeemed')
+  RETURNING id INTO v_redemption_id;
+
+  INSERT INTO public.points_ledger (family_id, child_id, event_type, points_delta, ref_type, ref_id)
+  VALUES (v_family_id, p_child_id, 'redeem', -v_cost, 'reward', p_reward_id);
+
+  RETURN json_build_object('ok', true, 'redemption_id', v_redemption_id);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.redeem_reward(uuid, uuid) TO authenticated;
+
+-- ============================================================
+-- 9) RPC: grant_bonus(child, points, note)
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.grant_bonus(p_child_id uuid, p_points int, p_note text)
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_family_id uuid;
+BEGIN
+  SELECT c.family_id INTO v_family_id
+  FROM public.children c
+  WHERE c.id = p_child_id;
+
+  IF v_family_id IS NULL THEN
+    RETURN json_build_object('error', 'Child not found');
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.family_members fm
+    WHERE fm.family_id = v_family_id AND fm.user_id = auth.uid()
+      AND fm.role IN ('parent','guardian','admin')
+  ) THEN
+    RETURN json_build_object('error', 'Not authorized');
+  END IF;
+
+  INSERT INTO public.points_ledger (family_id, child_id, event_type, points_delta, note)
+  VALUES (v_family_id, p_child_id, 'bonus', p_points, p_note);
+
+  RETURN json_build_object('ok', true);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.grant_bonus(uuid, int, text) TO authenticated;
+
+-- ============================================================
+-- 10) RLS (minimal, safe): enable RLS for new tables + basic policies
+-- ============================================================
+
+ALTER TABLE public.chore_catalog ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.reward_catalog ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.daily_status ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.points_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.reward_redemptions ENABLE ROW LEVEL SECURITY;
+
+-- If your database already has is_family_member(uuid), use it.
+-- If it does not, your existing policies would already be failing.
+-- Policies below assume is_family_member(family_id) exists.
+
+DO $$ BEGIN
+  DROP POLICY IF EXISTS chore_catalog_select_member ON public.chore_catalog;
+  DROP POLICY IF EXISTS reward_catalog_select_member ON public.reward_catalog;
+  DROP POLICY IF EXISTS daily_status_select_member ON public.daily_status;
+  DROP POLICY IF EXISTS points_ledger_select_member ON public.points_ledger;
+  DROP POLICY IF EXISTS reward_redemptions_select_member ON public.reward_redemptions;
+EXCEPTION WHEN undefined_object THEN
+  -- ignore if not present
+END $$;
+
+CREATE POLICY chore_catalog_select_member
+  ON public.chore_catalog
+  FOR SELECT
+  USING (is_family_member(family_id));
+
+CREATE POLICY reward_catalog_select_member
+  ON public.reward_catalog
+  FOR SELECT
+  USING (is_family_member(family_id));
+
+CREATE POLICY points_ledger_select_member
+  ON public.points_ledger
+  FOR SELECT
+  USING (is_family_member(family_id));
+
+CREATE POLICY reward_redemptions_select_member
+  ON public.reward_redemptions
+  FOR SELECT
+  USING (is_family_member(family_id));
+
+-- daily_status requires family membership via child->family join
+CREATE POLICY daily_status_select_member
+  ON public.daily_status
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1
+      FROM public.children c
+      WHERE c.id = daily_status.child_id
+        AND is_family_member(c.family_id)
+    )
+  );
+
+-- NOTE: Writes are intentionally done through SECURITY DEFINER RPCs above.
+-- If you later want direct INSERT/UPDATE policies, add them explicitly.
+
+-- ============================================================
+-- DONE
+-- ============================================================
+
+
+⸻
+
+What your developer must change in the frontend (to make chores/rewards show up)
+
+1) Catalog reads
+
+Replace any “frontend constants” catalog usage with Supabase reads:
+	•	chore_catalog filtered by family_id and active=true
+	•	reward_catalog filtered by family_id and active=true
+
+2) Catalog initialization (why nothing is showing)
+
+On first load after login:
+	•	call ensure_family_exists() → get family_id
+	•	fetch chore_catalog + reward_catalog for that family_id
+	•	if empty, call seed_default_catalog(family_id)
+	•	refetch catalogs and render
+
+3) Chore toggles (fix the error you showed)
+
+Any “toggle” logic must write to:
+	•	rpc('toggle_chore', { p_child_id, p_chore_id, p_date_key })
+and the UI must read completion from:
+	•	daily_status joined with chore_catalog for that day
+
+4) Points totals
+
+Stop depending on any legacy points table.
+Points total = sum(points_ledger.points_delta) per child.
+
+⸻
+
+Do you need to run a query in Supabase “to connect databases”?
+
+No. Supabase doesn’t require any “connection query.” The only required Supabase-side action is running the SQL migration above (tables + RPCs). Your app connects via the existing SUPABASE_URL + ANON_KEY env vars.

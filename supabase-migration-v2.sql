@@ -1,130 +1,83 @@
--- ============================================================
--- HomeQuest — Schema Migration v2
--- ============================================================
--- Updates RPCs and helpers to work with the actual Supabase schema:
---   family_members (instead of parent_profiles)
---   family_settings (instead of family_config for settings)
---   children.display_name (instead of children.name)
---
--- SAFE to run multiple times (idempotent / CREATE OR REPLACE).
--- Run in: Supabase Dashboard > SQL Editor > New Query > paste > Run
--- ============================================================
+That message is not true in two key ways:
+  1.	There is no “attached file” in this chat for me to read. So the claim “I’ve read through the full migration” is inaccurate.
+  2.	The list of “what changed” is a mix of guesses that may or may not match your actual Supabase schema. Some items could be true if you ran the SQL I provided (e.g., title fields), but I cannot verify what’s in your database from that message.
 
--- ============================================================
--- 1) HELPER: current_family_id() — updated for family_members
--- ============================================================
+Use this instead as the single source of truth for your developer: compare the frontend to the actual live schema in Supabase, and fix mismatches based on facts.
 
-create or replace function current_family_id()
-returns uuid
-language sql stable
-security definer
-as $$
-  select family_id from family_members where user_id = auth.uid()
-$$;
+⸻
 
--- ============================================================
--- 2) RPC: ensure_family_exists — updated for new schema
--- ============================================================
--- Creates families + family_members + family_settings if missing.
--- Called by frontend on login as fallback if trigger didn't fire.
+What your developer should do to confirm schema (no guessing)
 
-create or replace function ensure_family_exists(p_display_name text default 'Parent')
-returns json
-language plpgsql
-security definer
-as $$
-declare
-  v_user_id uuid;
-  v_family_id uuid;
-  v_existing_family_id uuid;
-  v_display_name text;
-  v_user_email text;
-begin
-  v_user_id := auth.uid();
-  if v_user_id is null then
-    return json_build_object('error', 'Not authenticated');
-  end if;
+Run these in Supabase → SQL Editor to pull the authoritative structure:
 
-  -- Fast path: check if family_members row already exists
-  select family_id into v_existing_family_id
-  from family_members
-  where user_id = v_user_id;
+-- Columns for key tables
+select table_name, column_name, data_type
+from information_schema.columns
+where table_schema='public'
+  and table_name in (
+    'families','family_members','family_settings','children',
+    'chore_catalog','reward_catalog','daily_status',
+    'points_ledger','reward_redemptions'
+  )
+order by table_name, ordinal_position;
 
-  if v_existing_family_id is not null then
-    -- Already set up, return existing data
-    select name into v_display_name from families where id = v_existing_family_id;
-    return json_build_object(
-      'family_id', v_existing_family_id,
-      'display_name', coalesce(v_display_name, p_display_name)
-    );
-  end if;
+-- Functions (RPCs) + signatures
+select n.nspname as schema, p.proname as function_name,
+       pg_get_function_identity_arguments(p.oid) as args,
+       pg_get_function_result(p.oid) as returns
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname='public'
+  and p.proname in (
+    'ensure_family_exists','current_family_id',
+    'add_child','seed_default_catalog',
+    'toggle_chore','redeem_reward','grant_bonus'
+  )
+order by function_name;
 
-  -- Slow path: trigger didn't fire, create everything atomically
-  select email into v_user_email from auth.users where id = v_user_id;
+-- RLS enabled?
+select relname as table, relrowsecurity as rls_enabled
+from pg_class
+where relname in (
+  'families','family_members','family_settings','children',
+  'chore_catalog','reward_catalog','daily_status',
+  'points_ledger','reward_redemptions'
+);
 
-  -- Check if family already exists (half-created state)
-  select id into v_family_id from families where owner_user_id = v_user_id limit 1;
 
-  if v_family_id is null then
-    insert into families (owner_user_id, name)
-    values (v_user_id, coalesce(p_display_name, 'My Family'))
-    returning id into v_family_id;
-  end if;
+⸻
 
-  -- Create family_members row
-  insert into family_members (user_id, family_id, role)
-  values (v_user_id, v_family_id, 'parent')
-  on conflict (user_id) do nothing;
+Expected schema and behavior (what frontend must conform to)
 
-  -- Create family_settings row with email from auth
-  insert into family_settings (family_id, primary_parent_email)
-  values (v_family_id, v_user_email)
-  on conflict (family_id) do nothing;
+Assuming you ran the Supabase migration I gave you, the expected shapes are:
 
-  return json_build_object('family_id', v_family_id, 'display_name', coalesce(p_display_name, 'Parent'));
-end;
-$$;
+Tables
+  •	families: id, created_by, name, timestamps
+  •	family_members: family_id, user_id, role
+  •	family_settings: email fields + summary schedule fields
+  •	children: id, family_id, display_name
+  •	chore_catalog: id, family_id, category, title, points, active, sort_order
+  •	reward_catalog: id, family_id, category, title, cost, requires_parent_approval, active, sort_order
+  •	daily_status: (child_id, chore_id, date_key) PK, completed boolean
+  •	points_ledger: append-only points deltas
+  •	reward_redemptions: redemption records
 
--- Grant execute to authenticated users
-grant execute on function ensure_family_exists(text) to authenticated;
-grant execute on function current_family_id() to authenticated;
-grant execute on function increment_child_points(uuid, int, boolean) to authenticated;
+Frontend flow
+  •	On login:
+  1.	rpc('ensure_family_exists') → returns family_id
+  2.	query chore_catalog + reward_catalog by family_id
+  3.	if empty → rpc('seed_default_catalog', { p_family_id: family_id }) then refetch
+  •	To add a kid:
+  •	rpc('add_child', { p_display_name }) (no inserts directly)
+  •	To toggle a chore:
+  •	rpc('toggle_chore', { p_child_id, p_chore_id, p_date_key })
+  •	UI reads completion from daily_status for that child/date
+  •	Points:
+  •	UI reads totals by sum(points_ledger.points_delta) per child
 
--- ============================================================
--- 3) Ensure family_settings has RLS policies
--- ============================================================
+⸻
 
-alter table family_settings enable row level security;
-
-do $$ begin
-  drop policy if exists "family_settings_select" on family_settings;
-  drop policy if exists "family_settings_insert" on family_settings;
-  drop policy if exists "family_settings_update" on family_settings;
-end $$;
-
-create policy "family_settings_select" on family_settings
-  for select using (family_id = current_family_id());
-create policy "family_settings_insert" on family_settings
-  for insert with check (family_id = current_family_id());
-create policy "family_settings_update" on family_settings
-  for update using (family_id = current_family_id());
-
--- ============================================================
--- 4) Ensure family_members has RLS policies
--- ============================================================
-
-alter table family_members enable row level security;
-
-do $$ begin
-  drop policy if exists "family_members_select_own" on family_members;
-  drop policy if exists "family_members_insert_own" on family_members;
-end $$;
-
-create policy "family_members_select_own" on family_members
-  for select using (user_id = auth.uid());
-create policy "family_members_insert_own" on family_members
-  for insert with check (user_id = auth.uid());
-
--- ============================================================
--- DONE! RPCs updated for new schema.
--- ============================================================
+Bottom line you can forward to your developer
+  •	Do not trust any narrative that says “I read the attached file” unless there is actually a file.
+  •	Verify schema and RPC signatures using the SQL above.
+  •	Refactor the frontend to match exactly what Supabase reports (tables, columns, RPC return types), then chores/rewards and toggles will be consistent again.

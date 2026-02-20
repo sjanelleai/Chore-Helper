@@ -1,0 +1,297 @@
+Chore Helper — Supabase-First Architecture Handoff (Frontend + DB Contract)
+
+This document defines the database architecture (Supabase) and the required frontend behavior so the app reliably supports: family creation, multiple children, chores/rewards catalog, daily completion tracking, points, and redemptions—fully backed by Supabase.
+
+⸻
+
+1) Source-of-truth: Supabase database structure
+
+Core identity + access tables (already in your Supabase)
+
+These tables define “who belongs to what family” and control access via RLS.
+
+public.families (RLS: enabled)
+
+Purpose: one record per family.
+	•	id uuid PK default gen_random_uuid()
+	•	created_by uuid NOT NULL (FK → auth.users.id)
+	•	name text NULL
+	•	created_at timestamptz default now()
+	•	updated_at timestamptz default now()
+
+Expected: every signed-in parent user ultimately has exactly one family membership (or more, if you later support invites).
+
+public.family_members (RLS: enabled)
+
+Purpose: links signed-in users to a family.
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL (FK → families.id)
+	•	user_id uuid NOT NULL (FK → auth.users.id)
+	•	role text NOT NULL default 'parent' (check: ('parent','guardian','admin'))
+	•	created_at timestamptz default now()
+
+Expected: when a parent signs up, an entry is created here.
+
+public.family_settings (RLS: enabled)
+
+Purpose: all family-level settings that drive UI + email summary scheduling.
+	•	family_id uuid PK (FK → families.id)
+	•	primary_parent_email text NULL
+	•	secondary_parent_email text NULL
+	•	daily_summary_enabled boolean NOT NULL default false
+	•	daily_summary_time_local text NULL default '19:30' (HH:MM)
+	•	timezone text NULL default 'America/Denver'
+	•	created_at timestamptz default now()
+	•	updated_at timestamptz default now()
+
+Expected: row exists for each family.
+
+public.children (RLS: enabled)
+
+Purpose: kids linked to family.
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL (FK → families.id)
+	•	display_name text NOT NULL
+	•	created_at timestamptz default now()
+
+Important: The UI must use display_name (not name). Any inserts/selects using name will fail.
+
+⸻
+
+2) Chores + Rewards fully stored in Supabase (new authoritative tables)
+
+These are required because chores/rewards must no longer depend on frontend-only constants.
+
+public.chore_catalog (RLS: enabled)
+
+Purpose: family-specific chore list shown in the app.
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL (FK → families.id)
+	•	category text NOT NULL
+	•	title text NOT NULL (not name)
+	•	points int NOT NULL default 0
+	•	active boolean NOT NULL default true
+	•	sort_order int NOT NULL default 0
+	•	created_at timestamptz default now()
+	•	updated_at timestamptz default now()
+
+public.reward_catalog (RLS: enabled)
+
+Purpose: family-specific reward store list.
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL (FK → families.id)
+	•	category text NOT NULL
+	•	title text NOT NULL (not name)
+	•	cost int NOT NULL default 0
+	•	requires_parent_approval boolean NOT NULL default false (not requires_approval)
+	•	active boolean NOT NULL default true
+	•	sort_order int NOT NULL default 0
+	•	created_at timestamptz default now()
+	•	updated_at timestamptz default now()
+
+⸻
+
+3) Daily completion tracking (per-chore rows)
+
+public.daily_status (RLS: enabled)
+
+Purpose: whether a child completed a specific chore on a given day.
+	•	child_id uuid NOT NULL (FK → children.id)
+	•	chore_id uuid NOT NULL (FK → chore_catalog.id)
+	•	date_key date NOT NULL
+	•	completed boolean NOT NULL default true
+	•	created_at timestamptz default now()
+Primary key: (child_id, chore_id, date_key)
+
+Important: This replaces any array-based “completed_chore_ids” approach. UI must query rows by (child_id, date_key).
+
+⸻
+
+4) Points and rewards ledger
+
+public.points_ledger (RLS: enabled)
+
+Purpose: immutable points changes; totals derived by SUM.
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL (FK → families.id)
+	•	child_id uuid NOT NULL (FK → children.id)
+	•	points_delta int NOT NULL
+	•	ref_type text NOT NULL (examples: chore, bonus, reward)
+	•	ref_id uuid NULL (chore_id or reward_id depending on ref_type)
+	•	note text NULL (not meta)
+	•	created_at timestamptz default now()
+
+Important: No meta, no date_key. UI must not expect those.
+
+public.reward_redemptions (RLS: enabled)
+
+Purpose: record reward redemptions.
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL (FK → families.id)
+	•	child_id uuid NOT NULL (FK → children.id)
+	•	reward_id uuid NOT NULL (FK → reward_catalog.id)
+	•	status text NOT NULL (example: pending, approved, rejected, fulfilled)
+	•	created_at timestamptz default now()
+
+Important: no updated_at. Frontend types must not require it.
+
+⸻
+
+5) Email summary operations (already present)
+
+public.email_send_log (RLS: disabled)
+
+Purpose: prevent duplicate nightly sends, track failures.
+	•	composite PK currently (date_key, family_key)
+	•	also has family_id uuid NULL, status, error, created_at
+
+Recommended contract going forward: use family_id as the identifier in new code paths; family_key only if legacy code still depends on it.
+
+⸻
+
+6) RLS + helper function contract
+
+Your audit shows RLS policies reference:
+
+public.is_family_member(uuid)
+
+Purpose: return boolean if auth.uid() is a member of the family.
+Used by policies such as:
+	•	families_select_member (SELECT) USING is_family_member(id)
+	•	children_select_member USING is_family_member(family_id)
+	•	children_insert_member WITH CHECK is_family_member(family_id)
+	•	family_settings_select_member USING is_family_member(family_id)
+	•	etc.
+
+The frontend must assume:
+	•	Reads/writes will silently fail unless the user is a valid family member and policies allow the action.
+	•	Any mutation should surface Supabase error responses in UI and logs (no infinite “loading, try again”).
+
+⸻
+
+7) Required RPCs and what frontend must call
+
+Direct table writes for certain operations frequently break under RLS and lead to “nothing happens” UX. These RPCs define deterministic backend actions.
+
+RPC: ensure_family_exists(p_display_name text default 'Parent') -> json
+
+Purpose: on login/Parent Zone load, guarantee:
+	•	one families row exists for the user (created_by = auth.uid())
+	•	one family_members row exists for the user
+	•	one family_settings row exists (with primary email from auth.users.email when available)
+
+Frontend contract:
+	•	Call once after session is established.
+	•	Store returned family_id.
+	•	If returns { error: ... } show the error and stop spinning.
+
+RPC: seed_default_catalog(p_family_id uuid) -> json (or similar return)
+
+Purpose: populate chore_catalog and reward_catalog if empty for the family.
+	•	Uses a server-side canonical seed list.
+	•	Must be idempotent (no duplicates when called multiple times).
+
+Frontend contract:
+	•	After ensure_family_exists, check if chore_catalog or reward_catalog is empty for family_id.
+	•	If empty, call seed RPC, then refetch catalogs.
+
+RPC: add_child(p_display_name text) -> children row
+
+Purpose: insert into children with correct family_id based on auth.uid() membership.
+Frontend contract:
+	•	Use RPC to add kids (do not insert directly with family_id pulled from client unless you’re explicitly supporting it).
+
+RPC: toggle_chore(p_child_id uuid, p_chore_id uuid, p_date_key date) -> json
+
+Purpose: upsert/delete (or flip completed state) in daily_status and write points changes to points_ledger in the same transaction.
+Expected minimal return: { ok: true, completed: boolean }
+
+Frontend contract:
+	•	Treat the returned completed as the new state.
+	•	Points totals come from ledger SUM, not from RPC payload.
+
+RPC: redeem_reward(p_child_id uuid, p_reward_id uuid) -> json
+
+Purpose: create a redemption row + write a negative ledger entry (or defer until approval depending on design).
+Expected minimal return: { ok: true, redemption_id: uuid }
+
+Frontend contract:
+	•	UI shows redemption confirmation; points totals derived from ledger refresh.
+
+RPC: grant_bonus(p_child_id uuid, p_points int, p_note text) -> json
+
+Purpose: arbitrary points adjustment; writes to points_ledger with ref_type=bonus.
+Frontend contract:
+	•	Use parameter p_note (not p_reason).
+
+⸻
+
+8) Frontend behavior checklist (what must happen in the app)
+
+A) Authentication bootstrap (every login)
+	1.	supabase.auth.getSession()
+	2.	If session exists:
+	•	rpc('ensure_family_exists', { p_display_name: 'Parent' })
+	•	Save family_id in client state
+	3.	Query:
+	•	children where family_id = <family_id> (select id, display_name)
+	•	family_settings where family_id = <family_id>
+	•	chore_catalog where family_id = <family_id> and active = true
+	•	reward_catalog where family_id = <family_id> and active = true
+	4.	If chore/reward catalogs return 0 rows:
+	•	rpc('seed_default_catalog', { p_family_id: <family_id> })
+	•	refetch catalogs
+
+B) Add Child
+	•	Call rpc('add_child', { p_display_name })
+	•	Refresh children list
+	•	UI must never send children.name or expect it in schema
+
+C) Chore list view (per selected child)
+	•	Fetch today’s completion:
+	•	daily_status where child_id = X and date_key = today
+	•	Render chore list from chore_catalog
+	•	Determine completion per chore by presence of matching daily_status row
+
+D) Toggle chore
+	•	Call rpc('toggle_chore', { p_child_id, p_chore_id, p_date_key })
+	•	Refetch daily_status and points total
+
+E) Points total
+	•	Query points:
+	•	select sum(points_delta) from points_ledger where child_id = X
+	•	Do not rely on legacy child_points or any “total_points” column unless it exists
+
+F) Rewards
+	•	Render from reward_catalog
+	•	Redeem via rpc('redeem_reward', { p_child_id, p_reward_id })
+	•	Refresh reward_redemptions and points total
+
+⸻
+
+9) Navigation UI requirement (menu always visible)
+
+Layout rule
+	•	Mobile: bottom navigation bar always visible.
+	•	Desktop/tablet: left side navigation always visible.
+	•	The menu must persist across all routes (Parent Zone, Kids, Chores, Rewards, Summary, Settings).
+
+Implementation contract
+	•	Wrap all routes inside a shared AppShell layout component.
+	•	The shell renders:
+	•	SideNav for width ≥ breakpoint
+	•	BottomNav for width < breakpoint
+	•	Route content renders inside the shell so navigation never unmounts.
+
+⸻
+
+10) Do you need to “run a query in Supabase to connect databases”?
+
+No. There is no “connect databases” query.
+
+What must exist for the frontend to work:
+	•	The Supabase project URL + anon key are set in the app environment.
+	•	The tables, RLS policies, and RPCs above exist in Supabase.
+	•	Seeding RPC exists so chores/rewards appear for new/empty families.
+
+The only SQL required is to create missing tables/RPCs/policies (migrations), not to “connect” anything.

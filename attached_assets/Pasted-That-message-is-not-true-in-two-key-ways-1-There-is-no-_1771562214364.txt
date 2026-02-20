@@ -1,0 +1,83 @@
+That message is not true in two key ways:
+	1.	There is no “attached file” in this chat for me to read. So the claim “I’ve read through the full migration” is inaccurate.
+	2.	The list of “what changed” is a mix of guesses that may or may not match your actual Supabase schema. Some items could be true if you ran the SQL I provided (e.g., title fields), but I cannot verify what’s in your database from that message.
+
+Use this instead as the single source of truth for your developer: compare the frontend to the actual live schema in Supabase, and fix mismatches based on facts.
+
+⸻
+
+What your developer should do to confirm schema (no guessing)
+
+Run these in Supabase → SQL Editor to pull the authoritative structure:
+
+-- Columns for key tables
+select table_name, column_name, data_type
+from information_schema.columns
+where table_schema='public'
+  and table_name in (
+    'families','family_members','family_settings','children',
+    'chore_catalog','reward_catalog','daily_status',
+    'points_ledger','reward_redemptions'
+  )
+order by table_name, ordinal_position;
+
+-- Functions (RPCs) + signatures
+select n.nspname as schema, p.proname as function_name,
+       pg_get_function_identity_arguments(p.oid) as args,
+       pg_get_function_result(p.oid) as returns
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname='public'
+  and p.proname in (
+    'ensure_family_exists','current_family_id',
+    'add_child','seed_default_catalog',
+    'toggle_chore','redeem_reward','grant_bonus'
+  )
+order by function_name;
+
+-- RLS enabled?
+select relname as table, relrowsecurity as rls_enabled
+from pg_class
+where relname in (
+  'families','family_members','family_settings','children',
+  'chore_catalog','reward_catalog','daily_status',
+  'points_ledger','reward_redemptions'
+);
+
+
+⸻
+
+Expected schema and behavior (what frontend must conform to)
+
+Assuming you ran the Supabase migration I gave you, the expected shapes are:
+
+Tables
+	•	families: id, created_by, name, timestamps
+	•	family_members: family_id, user_id, role
+	•	family_settings: email fields + summary schedule fields
+	•	children: id, family_id, display_name
+	•	chore_catalog: id, family_id, category, title, points, active, sort_order
+	•	reward_catalog: id, family_id, category, title, cost, requires_parent_approval, active, sort_order
+	•	daily_status: (child_id, chore_id, date_key) PK, completed boolean
+	•	points_ledger: append-only points deltas
+	•	reward_redemptions: redemption records
+
+Frontend flow
+	•	On login:
+	1.	rpc('ensure_family_exists') → returns family_id
+	2.	query chore_catalog + reward_catalog by family_id
+	3.	if empty → rpc('seed_default_catalog', { p_family_id: family_id }) then refetch
+	•	To add a kid:
+	•	rpc('add_child', { p_display_name }) (no inserts directly)
+	•	To toggle a chore:
+	•	rpc('toggle_chore', { p_child_id, p_chore_id, p_date_key })
+	•	UI reads completion from daily_status for that child/date
+	•	Points:
+	•	UI reads totals by sum(points_ledger.points_delta) per child
+
+⸻
+
+Bottom line you can forward to your developer
+	•	Do not trust any narrative that says “I read the attached file” unless there is actually a file.
+	•	Verify schema and RPC signatures using the SQL above.
+	•	Refactor the frontend to match exactly what Supabase reports (tables, columns, RPC return types), then chores/rewards and toggles will be consistent again.
