@@ -1,0 +1,62 @@
+Mostly true (the diagnosis is right), but you should NOT accept “just republish” until you verify one thing: that the deployed frontend is actually running the refactored bundle and is pointing at the same Supabase project.
+
+Here’s the sanity check + exact steps your developer should follow.
+
+What’s true
+	•	The Supabase error only happens when the client sends { name: ... } (insert/update/select) against public.children.
+	•	If your repo truly uses display_name everywhere, then either:
+	1.	the deployed site is running an older build, or
+	2.	a different codepath still uses name (another component/hook/route), or
+	3.	the deployed site is pointed at a different Supabase project than the one you audited.
+
+What to have your developer verify (no guessing)
+
+1) Confirm the live app is the latest build (hard proof)
+
+In the UI, add a temporary “build stamp” so you can see it on the deployed site:
+	•	In a top-level component (App layout / footer), render something like:
+	•	Build: 2026-02-19 18:42 (or commit hash)
+	•	Deploy.
+	•	Visit chore-helper.seanjanelle.com and confirm the stamp appears.
+
+If the stamp doesn’t appear, you are not deploying what you think you are.
+
+2) Confirm the failing request payload
+
+Open DevTools → Network → the request that fails when you click Add Kid.
+
+You want to see:
+	•	Endpoint like /rest/v1/children
+	•	Request body contains display_name, not name
+
+If the payload shows name, your refactor missed a path. If it shows display_name but still errors, you’re pointed at the wrong DB/project or wrong table.
+
+3) Confirm the deployed env vars match the audited Supabase project
+
+Check deployed environment variables:
+	•	VITE_SUPABASE_URL
+	•	VITE_SUPABASE_ANON_KEY
+
+Make sure they match the project ref you audited (the one with children.display_name). A mismatch causes exactly this kind of “schema cache” confusion.
+
+⸻
+
+The actual fix (what should be deployed)
+
+Every insert into children must be:
+
+await supabase.from("children").insert({
+  family_id,
+  display_name: childName,
+});
+
+And every select should request display_name and map it to UI.
+
+⸻
+
+What to tell your developer (copy/paste)
+	•	“Don’t assume republish fixes it. Add a visible build stamp, deploy, and confirm it shows up on the live site.”
+	•	“Capture the failing Network request and confirm whether the payload includes name or display_name.”
+	•	“Verify the deployed VITE_SUPABASE_URL points to the Supabase project where children.display_name exists.”
+
+That will pinpoint whether this is deployment, missed refactor, or wrong project config—fast, no hand-waving.
