@@ -1,0 +1,103 @@
+That banner is a classic sign of one thing: your frontend is waiting on a “family exists” query that never becomes true (or is slow because it’s being blocked/never written). In other words, this isn’t “a little latency” — it’s almost always missing insert / RLS block / wrong table being polled.
+
+Here’s the fastest way to kill it.
+
+⸻
+
+The real fix: stop “polling and hoping” and make one explicit call
+
+Instead of:
+	•	UI loads → select family → none → “Setting up…” → retry loop
+
+Do:
+	•	UI loads → call RPC ensure_family_for_user() → get family_id back immediately → proceed
+
+If you don’t have that RPC yet (or it’s not being used), this banner will keep happening.
+
+⸻
+
+What your developer should do (minimal change)
+
+On Parent Zone mount:
+	1.	await supabase.auth.getUser()
+	2.	Call:
+	•	rpc('ensure_family_for_user')
+	3.	With returned family_id, fetch:
+	•	family_settings by family_id
+	•	children by family_id
+
+If RPC fails, show the error (not a generic “try again”).
+
+⸻
+
+The 3 likely causes (ranked) and how to prove each in 60 seconds
+
+Cause #1: RLS blocks the insert/select
+
+Prove it: open browser DevTools → Network → find the failing Supabase request
+If response is 401/403 or mentions “policy”, that’s it.
+
+Fix: add/adjust RLS policies OR move family creation into security definer RPC.
+
+⸻
+
+Cause #2: You’re polling the wrong table (still using family_config)
+
+Your schema now has families/family_members/family_settings/children, but if the UI is still waiting for family_config.key/value to exist, it may never show “ready”.
+
+Fix: make “family exists” mean family_members row exists (or RPC returns a family_id).
+
+⸻
+
+Cause #3: Membership isn’t created (family exists but no family_members row)
+
+Then “find my family” queries return nothing forever.
+
+Fix: ensure_family_for_user() must insert into family_members in the same transaction.
+
+⸻
+
+A concrete “do this right now” debug checklist
+
+Tell your developer to do this once while the banner is showing:
+
+1) In DevTools Console, log the exact error from the call that’s “setting up”
+
+They need to print the Supabase error object (code/message/details/hint).
+
+2) In Supabase Dashboard → Logs
+
+Check for denied RLS operations or failed inserts.
+
+3) Run this SQL using the new user’s UUID
+
+select * from public.family_members where user_id = 'NEW_USER_UUID';
+
+	•	0 rows = your setup step isn’t happening (or is blocked)
+
+⸻
+
+My recommendation (so you never see this again)
+
+Even in beta, make “setup” deterministic:
+	•	One RPC (ensure_family_for_user) does:
+	•	create family
+	•	create family_members
+	•	create family_settings
+	•	return family_id
+
+Then the UI never loops; it either succeeds or shows a real error.
+
+⸻
+
+If you paste ONE thing, I can tell you exactly what’s wrong
+
+Paste the response/error from the network call happening during “Setting up…” (or the console error object).
+It will typically say something like:
+	•	permission denied for table ...
+	•	new row violates row-level security policy
+	•	no rows returned
+	•	relation does not exist
+	•	etc.
+
+Once I see that, I’ll tell you the exact policy/RPC fix in one shot.
