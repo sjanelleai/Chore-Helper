@@ -389,10 +389,13 @@ function SettingsSection() {
     }
   }, [userState?.parentEmail, userState?.secondaryParentEmail, userState?.allowanceEnabled, userState?.pointsPerDollar, userState?.dailySummaryEnabled, userState?.dailySummaryTimeLocal, userState?.dailySummaryTimezone]);
 
+  const emailsMatch = !!(email.trim() && secondaryEmail.trim() && email.trim().toLowerCase() === secondaryEmail.trim().toLowerCase());
+
   const handleSave = () => {
+    if (emailsMatch) return;
     updateSettings.mutate({
-      parentEmail: email || null,
-      secondaryParentEmail: secondaryEmail || null,
+      parentEmail: email.trim() || null,
+      secondaryParentEmail: secondaryEmail.trim() || null,
       allowanceEnabled: allowance,
       pointsPerDollar,
       dailySummaryEnabled: summaryEnabled,
@@ -430,9 +433,14 @@ function SettingsSection() {
             value={secondaryEmail}
             onChange={(e) => setSecondaryEmail(e.target.value)}
             placeholder="other-parent@example.com"
-            className="w-full p-3 rounded-xl border bg-background text-foreground"
+            className={cn("w-full p-3 rounded-xl border bg-background text-foreground", emailsMatch && "border-red-400")}
             data-testid="input-secondary-parent-email"
           />
+          {emailsMatch && (
+            <p className="text-xs text-red-500 mt-1" data-testid="text-email-duplicate-error">
+              Secondary email must be different from the primary email
+            </p>
+          )}
         </div>
 
         <div className="flex items-center justify-between gap-2 p-3 rounded-xl border">
@@ -532,7 +540,7 @@ function SettingsSection() {
 
         <Button
           onClick={handleSave}
-          disabled={updateSettings.isPending}
+          disabled={updateSettings.isPending || emailsMatch}
           className="w-full"
           data-testid="button-save-settings"
         >

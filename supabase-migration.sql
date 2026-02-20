@@ -226,7 +226,7 @@ begin
   insert into parent_profiles (user_id, family_id, parent_display_name)
   values (new.id, v_family_id, coalesce(new.raw_user_meta_data->>'name', 'Parent'));
 
-  insert into family_config (family_id) values (v_family_id);
+  insert into family_config (family_id, parent_email) values (v_family_id, new.email);
 
   return new;
 end;
@@ -345,6 +345,7 @@ declare
   v_user_id uuid;
   v_family_id uuid;
   v_profile record;
+  v_user_email text;
 begin
   v_user_id := auth.uid();
   if v_user_id is null then
@@ -359,6 +360,8 @@ begin
     return json_build_object('family_id', v_profile.family_id, 'display_name', coalesce(v_profile.parent_display_name, p_display_name));
   end if;
 
+  select email into v_user_email from auth.users where id = v_user_id;
+
   select id into v_family_id from families where owner_user_id = v_user_id limit 1;
 
   if v_family_id is null then
@@ -370,7 +373,8 @@ begin
   values (v_user_id, v_family_id, p_display_name)
   on conflict (user_id) do nothing;
 
-  insert into family_config (family_id) values (v_family_id)
+  insert into family_config (family_id, parent_email)
+  values (v_family_id, v_user_email)
   on conflict (family_id) do nothing;
 
   return json_build_object('family_id', v_family_id, 'display_name', p_display_name);
