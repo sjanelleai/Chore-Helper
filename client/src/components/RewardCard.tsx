@@ -25,7 +25,7 @@ export function RewardCard({ reward, userPoints, onRedeem, isPending }: RewardCa
     >
       <div className="text-center mb-4 flex-1">
         <h3 className="font-display font-bold text-base text-foreground leading-tight mb-1">
-          {reward.name}
+          {reward.title}
         </h3>
         <p className="text-xs text-muted-foreground">{reward.category}</p>
         <div className="inline-flex items-center gap-1.5 bg-background px-2 py-1 rounded-md border border-border/50 shadow-sm mt-2">

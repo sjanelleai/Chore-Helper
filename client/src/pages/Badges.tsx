@@ -104,7 +104,7 @@ export default function Badges() {
               {purchases?.map((purchase) => (
                 <div key={purchase.id} className="flex items-center justify-between gap-2 p-4 bg-card border rounded-xl shadow-sm">
                   <div className="min-w-0">
-                    <p className="font-bold text-foreground truncate">{purchase.reward_name}</p>
+                    <p className="font-bold text-foreground truncate">{purchase.reward_title}</p>
                     <p className="text-xs text-muted-foreground">
                       {new Date(purchase.purchased_at).toLocaleDateString()}
                     </p>

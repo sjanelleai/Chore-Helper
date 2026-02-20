@@ -189,7 +189,7 @@ function ChoreConfigSection() {
                           "font-medium text-sm truncate",
                           localEnabled[item.id] ? "text-foreground" : "text-muted-foreground"
                         )}>
-                          {item.name}
+                          {item.title}
                         </span>
                       </label>
                       <div className="flex items-center gap-1 shrink-0">
@@ -304,7 +304,7 @@ function RewardConfigSection() {
                           "font-medium text-sm truncate",
                           localEnabled[item.id] ? "text-foreground" : "text-muted-foreground"
                         )}>
-                          {item.name}
+                          {item.title}
                         </span>
                       </label>
                       <div className="flex items-center gap-1 shrink-0">

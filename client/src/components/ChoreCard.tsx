@@ -62,7 +62,7 @@ export function ChoreCard({ chore, onToggle, isPending }: ChoreCardProps) {
             "font-display text-lg font-bold truncate transition-all",
             chore.completed ? "text-muted-foreground line-through decoration-2 decoration-green-500/50" : "text-foreground"
           )}>
-            {chore.name}
+            {chore.title}
           </h3>
           <p className="text-sm font-medium text-muted-foreground mt-0.5 ml-1">
             {chore.completed ? "Completed!" : `Earn ${chore.points} points`}

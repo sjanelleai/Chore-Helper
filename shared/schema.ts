@@ -4,7 +4,7 @@ import { z } from "zod";
 
 export interface EnabledChore {
   id: string;
-  name: string;
+  title: string;
   points: number;
   completed: boolean;
   categoryName: string;
@@ -12,7 +12,7 @@ export interface EnabledChore {
 
 export interface EnabledReward {
   id: string;
-  name: string;
+  title: string;
   cost: number;
   category: string;
 }
@@ -21,7 +21,7 @@ export interface ChoreCatalogRow {
   id: string;
   family_id: string;
   category: string;
-  name: string;
+  title: string;
   points: number;
   active: boolean;
   sort_order: number;
@@ -33,9 +33,9 @@ export interface RewardCatalogRow {
   id: string;
   family_id: string;
   category: string;
-  name: string;
+  title: string;
   cost: number;
-  requires_approval: boolean;
+  requires_parent_approval: boolean;
   active: boolean;
   sort_order: number;
   created_at: string;
@@ -45,12 +45,12 @@ export interface RewardCatalogRow {
 export interface PointsLedgerRow {
   id: string;
   family_id: string;
-  child_id: string | null;
-  date_key: string;
+  child_id: string;
   event_type: string;
-  ref_id: string | null;
   points_delta: number;
-  meta: Record<string, any>;
+  ref_type: string | null;
+  ref_id: string | null;
+  note: string | null;
   created_at: string;
 }
 
@@ -62,14 +62,14 @@ export interface RewardRedemptionRow {
   cost: number;
   status: string;
   created_at: string;
-  updated_at: string;
 }
 
 export interface DailyStatusRow {
   child_id: string;
+  chore_id: string;
   date_key: string;
-  completed_chore_ids: string[];
-  points_earned: number;
+  completed: boolean;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
 }

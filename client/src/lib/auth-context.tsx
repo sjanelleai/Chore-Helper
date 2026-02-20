@@ -62,7 +62,7 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
       setChildrenList(
         kids.map((k: any) => ({
           id: k.id,
-          displayName: k.display_name || k.name || "Child",
+          displayName: k.display_name || "Child",
           avatar: k.avatar ?? null,
           hasPin: !!(k.pin_hash),
         }))
