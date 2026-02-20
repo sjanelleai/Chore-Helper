@@ -1,0 +1,165 @@
+Option A — App-seeded catalog (future-proof for new families)
+
+Goal
+
+Guarantee that every family has a default set of chores and rewards in Supabase by having the app automatically seed when it detects an empty catalog.
+
+This is idempotent: safe to run multiple times and safe across refreshes/devices.
+
+⸻
+
+Preconditions (Supabase)
+
+These must already exist:
+	1.	Tables:
+
+	•	public.chore_catalog
+	•	public.reward_catalog
+
+	2.	RPC:
+
+	•	public.seed_default_catalog(p_family_id uuid)
+	•	Must be idempotent (does nothing if catalog already exists for that family)
+	•	Must insert the default chores/rewards for that family
+
+	3.	Family resolution:
+
+	•	App can obtain family_id for the logged-in user:
+	•	via family_members lookup OR ensure_family_exists() RPC
+
+⸻
+
+Frontend behavior contract (exact)
+
+When to run seeding
+
+Run seeding after login and after a family id is known, in these moments:
+	•	App boot / Parent Zone load
+	•	Any time family_id changes (switch family support later)
+	•	Optional safety: after a user is invited into an existing family (membership created)
+
+What “empty catalog” means
+
+Treat catalog as empty if either returns zero rows:
+	•	active chores list length === 0
+	•	active rewards list length === 0
+
+(You can choose “all rows” or “active only”; be consistent with how you show UI.)
+
+⸻
+
+Implementation steps
+
+Step 1 — Resolve family_id
+
+In your auth bootstrap flow:
+	1.	Ensure session exists
+	2.	Get family id:
+
+	•	preferred: rpc('ensure_family_exists') returns { family_id }
+	•	or query:
+	•	select family_id from family_members where user_id = auth.uid() limit 1
+
+Store familyId in app state/context.
+
+⸻
+
+Step 2 — Fetch catalog
+
+After familyId is known:
+
+Chores query
+	•	select id, family_id, category, title, points, active, sort_order from chore_catalog
+	•	filter .eq('family_id', familyId)
+	•	optional .eq('active', true)
+	•	order by category, sort_order
+
+Rewards query
+	•	select id, family_id, category, title, cost, requires_parent_approval, active, sort_order from reward_catalog
+	•	filter .eq('family_id', familyId)
+	•	optional .eq('active', true)
+	•	order by category, sort_order
+
+⸻
+
+Step 3 — If empty, seed defaults
+
+If either list is empty:
+
+Call:
+	•	rpc('seed_default_catalog', { p_family_id: familyId })
+
+Expected RPC outcomes:
+	•	success response like { seeded: true } OR { seeded: false, reason: 'Catalog already exists' }
+	•	failure returns Supabase error — must be surfaced to logs/UI
+
+⸻
+
+Step 4 — Refetch catalogs after seeding
+
+After the seed RPC returns successfully:
+	•	refetch both chore and reward catalogs
+
+If using TanStack Query / React Query:
+	•	invalidate:
+	•	['chore_catalog', familyId]
+	•	['reward_catalog', familyId]
+
+If using manual fetch:
+	•	call the selects again immediately.
+
+⸻
+
+Required error handling (no silent failures)
+
+If any of these fail:
+	•	fetching catalogs
+	•	calling seed RPC
+	•	refetching catalogs
+
+…log and surface:
+	•	error.message
+	•	error.details
+	•	error.hint
+
+The app must not just show “Loading…” forever.
+
+⸻
+
+Suggested code structure (non-prescriptive)
+
+Create a single “ensure catalog” function/hook used in the app bootstrap:
+	•	ensureCatalogSeeded(familyId)
+	1.	fetch chore/reward counts (or lists)
+	2.	if empty → seed_default_catalog
+	3.	refetch
+
+Call it:
+	•	right after ensure_family_exists completes
+	•	and/or in the Parent Zone entry route
+
+⸻
+
+QA acceptance criteria
+	1.	New user → new family
+
+	•	user signs up
+	•	app resolves familyId
+	•	chores and rewards appear without manual SQL steps
+
+	2.	Existing family
+
+	•	no duplicates inserted on refresh
+	•	seeding does not overwrite custom catalog edits
+
+	3.	Cold start / refresh
+
+	•	catalogs still appear consistently
+	•	no “empty UI” state unless the DB actually has no rows and seed failed
+
+⸻
+
+Notes
+	•	This approach relies on the app being able to detect empty catalogs and run the seed RPC.
+	•	It’s safe for production because the RPC is idempotent and the app refetches immediately after seeding.
+	•	No extra Supabase triggers are required.

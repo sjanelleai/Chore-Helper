@@ -1,0 +1,153 @@
+Your gap analysis is accurate. Here’s the dev-ready direction to implement **Option A correctly** (seed immediately after auth bootstrap, seed once, fail loudly, never “empty UI silently”).
+
+---
+
+## Target behavior
+
+1. **Right after** `ensure_family_exists()` returns a `familyId`, the app runs **one** catalog check:
+
+   * if either `chore_catalog` or `reward_catalog` is empty → call `seed_default_catalog(familyId)` once
+   * then refetch both catalogs
+2. `useChoreCatalog()` / `useRewardCatalog()` become **pure readers** (no seeding).
+3. If seeding fails, user sees a clear error (toast + inline message), and the app does not pretend the catalog is empty.
+
+---
+
+## Implementation plan (what to build)
+
+### 1) Create a single `ensureCatalogSeeded(familyId)` helper
+
+Put this in a shared file (e.g. `lib/catalogSeed.ts` or inside your data layer).
+
+**Contract**
+
+* Inputs: `familyId`, `supabase client`, and a `queryClient` (if using TanStack Query)
+* Output: `{ seeded: boolean }` or throw a structured error
+
+**Logic**
+
+* Query counts only (fast):
+
+  * `select count(*)` from `chore_catalog` where `family_id = familyId`
+  * `select count(*)` from `reward_catalog` where `family_id = familyId`
+* If either is 0:
+
+  * call `rpc('seed_default_catalog', { p_family_id: familyId })`
+  * if rpc error → throw error (do not swallow)
+* Invalidate/refetch both catalog queries after successful seed.
+
+**Pseudo-code**
+
+```ts
+export async function ensureCatalogSeeded({ supabase, queryClient, familyId }) {
+  const choresCount = await supabase
+    .from("chore_catalog")
+    .select("id", { count: "exact", head: true })
+    .eq("family_id", familyId);
+
+  if (choresCount.error) throw choresCount.error;
+
+  const rewardsCount = await supabase
+    .from("reward_catalog")
+    .select("id", { count: "exact", head: true })
+    .eq("family_id", familyId);
+
+  if (rewardsCount.error) throw rewardsCount.error;
+
+  const needsSeed = (choresCount.count ?? 0) === 0 || (rewardsCount.count ?? 0) === 0;
+
+  if (needsSeed) {
+    const { error: seedError } = await supabase.rpc("seed_default_catalog", { p_family_id: familyId });
+    if (seedError) throw seedError;
+
+    // refresh catalogs
+    queryClient.invalidateQueries({ queryKey: ["chore_catalog", familyId] });
+    queryClient.invalidateQueries({ queryKey: ["reward_catalog", familyId] });
+  }
+
+  return { seeded: needsSeed };
+}
+```
+
+---
+
+### 2) Call `ensureCatalogSeeded` during auth bootstrap
+
+Wherever you currently do:
+
+* establish session
+* call `ensure_family_exists()`
+* set familyId
+
+…add:
+
+* `await ensureCatalogSeeded({ familyId })`
+
+**Important:** run it once per login/session start, not per page.
+
+Implementation placement:
+
+* `auth-context.tsx` (after familyId is resolved)
+* or an App bootstrap effect in `AppLayout` that runs only when `familyId` changes from `null → value`.
+
+---
+
+### 3) Remove seeding logic from `useChoreCatalog` and `useRewardCatalog`
+
+These hooks should:
+
+* query the catalog
+* return data + loading/error states
+
+They should **not** call `seed_default_catalog` anymore.
+
+---
+
+### 4) Add “no silent empty UI” protection
+
+If catalogs are empty and seeding failed:
+
+* show a clear error message in the UI (not just toast)
+* and show a “Retry” button that calls `ensureCatalogSeeded` again
+
+Minimum UX:
+
+* If catalog query returns 0 items:
+
+  * if `catalogSeedError` exists → show message + retry
+  * else show “No chores yet” only if truly intended (rare in this app)
+
+---
+
+### 5) Error surfacing requirements
+
+Wherever you catch seed errors, surface:
+
+* `error.message`
+* `error.details`
+* `error.hint`
+
+Example extraction:
+
+```ts
+const msg = [err.message, err.details, err.hint].filter(Boolean).join(" | ");
+toast({ title: "Catalog setup failed", description: msg, variant: "destructive" });
+```
+
+---
+
+## What this fixes
+
+* **Seeding happens too late** → fixed (runs right after auth bootstrap)
+* **Redundant double seeding** → fixed (one centralized call)
+* **Silent seed failures** → fixed (errors surfaced + retry)
+* **Empty UI without explanation** → fixed (explicit error state)
+
+---
+
+## Acceptance criteria
+
+* New signup → lands anywhere in app → chores/rewards exist without visiting catalog pages first
+* `seed_default_catalog` is called at most once per family (unless explicit retry)
+* If seed RPC fails, user sees a useful error and can retry
+* `useChoreCatalog/useRewardCatalog` no longer contain any seeding logic
