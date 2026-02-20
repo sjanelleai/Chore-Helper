@@ -716,10 +716,10 @@ function ChildManagementSection() {
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold shrink-0">
-                {kid.name.charAt(0).toUpperCase()}
+                {kid.displayName.charAt(0).toUpperCase()}
               </div>
               <div className="min-w-0">
-                <p className="font-bold text-foreground truncate">{kid.name}</p>
+                <p className="font-bold text-foreground truncate">{kid.displayName}</p>
                 <p className="text-xs text-muted-foreground">
                   {kid.hasPin ? "PIN protected" : "No PIN"}
                 </p>
@@ -730,7 +730,7 @@ function ChildManagementSection() {
                 variant="outline"
                 size="sm"
                 onClick={() => selectChild(kid.id)}
-                data-testid={`button-switch-to-${kid.name}`}
+                data-testid={`button-switch-to-${kid.displayName}`}
               >
                 Switch
               </Button>
@@ -801,7 +801,7 @@ export default function ParentPanel() {
         {activeChild && (
           <div className="bg-primary/5 border border-primary/20 rounded-xl p-3 text-center">
             <p className="text-sm text-muted-foreground">Managing</p>
-            <p className="font-bold text-lg text-foreground" data-testid="text-active-child-name">{activeChild.name}</p>
+            <p className="font-bold text-lg text-foreground" data-testid="text-active-child-name">{activeChild.displayName}</p>
           </div>
         )}
         <ChildManagementSection />

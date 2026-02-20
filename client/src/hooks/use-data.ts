@@ -17,7 +17,82 @@ const BADGE_DEFS = [
   { key: "legend", name: "Legend", threshold: 2000, icon: "crown" },
 ];
 
-// --- Family Config ---
+// --- Family Settings (from family_settings table) ---
+
+export function useFamilySettings() {
+  const { family } = useAuth();
+  return useQuery({
+    queryKey: ["family_settings", family?.familyId],
+    enabled: !!family?.familyId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("family_settings")
+        .select("*")
+        .eq("family_id", family!.familyId)
+        .single();
+
+      if (error || !data) {
+        console.warn("[use-data] family_settings not found, attempting to create defaults");
+        const { data: { user: currentUser } } = await supabase.auth.getUser();
+        const { data: inserted, error: insertErr } = await supabase
+          .from("family_settings")
+          .insert({
+            family_id: family!.familyId,
+            primary_parent_email: currentUser?.email || null,
+          })
+          .select()
+          .single();
+
+        if (insertErr || !inserted) {
+          console.warn("[use-data] Could not create family_settings, using defaults:", insertErr);
+          return {
+            family_id: family!.familyId,
+            primary_parent_email: currentUser?.email || null,
+            secondary_parent_email: null,
+            daily_summary_enabled: false,
+            daily_summary_time_local: "19:30",
+            timezone: "America/Denver",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+        }
+        return inserted as any;
+      }
+
+      return data as {
+        family_id: string;
+        primary_parent_email: string | null;
+        secondary_parent_email: string | null;
+        daily_summary_enabled: boolean;
+        daily_summary_time_local: string | null;
+        timezone: string | null;
+        created_at: string;
+        updated_at: string;
+      };
+    },
+  });
+}
+
+// --- Catalog Config (frontend constants for now — Phase 2 will persist) ---
+
+function getDefaultCatalogConfig() {
+  const enabledChores: Record<string, boolean> = {};
+  const enabledRewards: Record<string, boolean> = {};
+  const pointsByChoreId: Record<string, number> = {};
+  const costByRewardId: Record<string, number> = {};
+
+  STARTER_CHORES.forEach(id => { enabledChores[id] = true; });
+  STARTER_REWARDS.forEach(id => { enabledRewards[id] = true; });
+
+  flattenCatalog(CATALOG.chores).forEach(c => {
+    pointsByChoreId[c.id] = c.defaultPoints;
+  });
+  flattenCatalog(CATALOG.rewards).forEach(r => {
+    costByRewardId[r.id] = r.defaultCost;
+  });
+
+  return { enabledChores, enabledRewards, pointsByChoreId, costByRewardId, allowanceEnabled: false, pointsPerDollar: 600 };
+}
 
 export function useFamilyConfig() {
   const { family } = useAuth();
@@ -25,26 +100,16 @@ export function useFamilyConfig() {
     queryKey: ["family_config", family?.familyId],
     enabled: !!family?.familyId,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("family_config")
-        .select("*")
-        .eq("family_id", family!.familyId)
-        .single();
-      if (error) throw error;
-      return data as {
-        id: string;
-        family_id: string;
-        enabled_chores: Record<string, boolean>;
-        enabled_rewards: Record<string, boolean>;
-        points_by_chore_id: Record<string, number>;
-        cost_by_reward_id: Record<string, number>;
-        allowance_enabled: boolean;
-        points_per_dollar: number;
-        parent_email: string | null;
-        secondary_parent_email: string | null;
-        daily_summary_enabled: boolean;
-        daily_summary_time_local: string;
-        daily_summary_timezone: string;
+      const defaults = getDefaultCatalogConfig();
+      return {
+        id: family!.familyId,
+        family_id: family!.familyId,
+        enabled_chores: defaults.enabledChores,
+        enabled_rewards: defaults.enabledRewards,
+        points_by_chore_id: defaults.pointsByChoreId,
+        cost_by_reward_id: defaults.costByRewardId,
+        allowance_enabled: defaults.allowanceEnabled,
+        points_per_dollar: defaults.pointsPerDollar,
       };
     },
   });
@@ -115,14 +180,8 @@ export function useToggleChore() {
     mutationFn: async (choreId: string) => {
       if (!activeChildId || !family) throw new Error("No child selected");
 
-      const { data: config } = await supabase
-        .from("family_config")
-        .select("enabled_chores, points_by_chore_id")
-        .eq("family_id", family.familyId)
-        .single();
-      if (!config) throw new Error("Config not found");
-
-      const enabledMap = (config.enabled_chores as Record<string, boolean>) || {};
+      const defaults = getDefaultCatalogConfig();
+      const enabledMap = defaults.enabledChores;
       if (!enabledMap[choreId]) throw new Error("Chore not enabled");
 
       const today = localDateKey(new Date());
@@ -154,7 +213,7 @@ export function useToggleChore() {
         .update({ completed_chores: completedMap })
         .eq("id", dailyData.id);
 
-      const pointsMap = (config.points_by_chore_id as Record<string, number>) || {};
+      const pointsMap = defaults.pointsByChoreId;
       const choreItem = flattenCatalog(CATALOG.chores).find(c => c.id === choreId);
       const pts = clampNumber(pointsMap[choreId] ?? choreItem?.defaultPoints ?? 0, 0, 999999);
       const pointsDelta = nowDone ? pts : -pts;
@@ -270,29 +329,23 @@ export function useRedeemReward() {
     mutationFn: async (rewardId: string) => {
       if (!activeChildId || !family) throw new Error("No child selected");
 
-      const { data: config } = await supabase
-        .from("family_config")
-        .select("enabled_rewards, cost_by_reward_id, allowance_enabled, points_per_dollar")
-        .eq("family_id", family.familyId)
-        .single();
-      if (!config) throw new Error("Config not found");
-
-      const enabledMap = (config.enabled_rewards as Record<string, boolean>) || {};
+      const defaults = getDefaultCatalogConfig();
+      const enabledMap = defaults.enabledRewards;
       if (!enabledMap[rewardId]) throw new Error("Reward not enabled");
 
-      if (rewardId.startsWith("allow_") && !config.allowance_enabled) {
+      if (rewardId.startsWith("allow_") && !defaults.allowanceEnabled) {
         throw new Error("Allowance is not enabled");
       }
 
       const rewardItem = flattenCatalog(CATALOG.rewards).find(r => r.id === rewardId);
       if (!rewardItem) throw new Error("Reward not found");
 
-      const costMap = (config.cost_by_reward_id as Record<string, number>) || {};
+      const costMap = defaults.costByRewardId;
       let cost = clampNumber(costMap[rewardId] ?? rewardItem.defaultCost, 0, 999999);
 
       if (rewardId.startsWith("allow_")) {
         const dollars = rewardId === "allow_1" ? 1 : rewardId === "allow_5" ? 5 : 10;
-        cost = config.points_per_dollar * dollars;
+        cost = defaults.pointsPerDollar * dollars;
       }
 
       const { data: pts } = await supabase
@@ -369,28 +422,29 @@ export function usePurchases() {
   });
 }
 
-// --- User State (now derived from child_points + family_config) ---
+// --- User State (derived from child_points + family_settings) ---
 
 export function useUserState() {
   const { data: pts } = useChildPoints();
+  const { data: settings } = useFamilySettings();
   const { data: config } = useFamilyConfig();
 
-  const combined = pts && config ? {
+  const combined = pts && settings ? {
     totalPoints: pts.points,
     totalEarnedLifetime: pts.lifetime_points,
-    parentEmail: config.parent_email,
-    secondaryParentEmail: config.secondary_parent_email,
-    allowanceEnabled: config.allowance_enabled,
-    pointsPerDollar: config.points_per_dollar,
-    dailySummaryEnabled: config.daily_summary_enabled ?? false,
-    dailySummaryTimeLocal: config.daily_summary_time_local ?? "18:00",
-    dailySummaryTimezone: config.daily_summary_timezone ?? "America/Denver",
+    parentEmail: settings.primary_parent_email,
+    secondaryParentEmail: settings.secondary_parent_email,
+    allowanceEnabled: config?.allowance_enabled ?? false,
+    pointsPerDollar: config?.points_per_dollar ?? 600,
+    dailySummaryEnabled: settings.daily_summary_enabled ?? false,
+    dailySummaryTimeLocal: settings.daily_summary_time_local ?? "19:30",
+    dailySummaryTimezone: settings.timezone ?? "America/Denver",
   } : undefined;
 
-  return { data: combined, isLoading: !pts || !config };
+  return { data: combined, isLoading: !pts || !settings };
 }
 
-// --- Config (for Parent Panel) ---
+// --- Config (for Parent Panel catalog — frontend constants for now) ---
 
 export function useConfig() {
   const { data: config } = useFamilyConfig();
@@ -410,22 +464,11 @@ export function useConfig() {
 export function useUpdateChoreConfig() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { family } = useAuth();
 
   return useMutation({
-    mutationFn: async (data: { enabledChores: Record<string, boolean>; pointsByChoreId: Record<string, number> }) => {
-      if (!family) throw new Error("No family");
-
-      const { error } = await supabase
-        .from("family_config")
-        .update({
-          enabled_chores: data.enabledChores,
-          points_by_chore_id: data.pointsByChoreId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("family_id", family.familyId);
-
-      if (error) throw error;
+    mutationFn: async (_data: { enabledChores: Record<string, boolean>; pointsByChoreId: Record<string, number> }) => {
+      // Phase 2: persist to family_config key/value store
+      // For now, catalog config is frontend-only defaults
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["family_config"] });
@@ -441,22 +484,11 @@ export function useUpdateChoreConfig() {
 export function useUpdateRewardConfig() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { family } = useAuth();
 
   return useMutation({
-    mutationFn: async (data: { enabledRewards: Record<string, boolean>; costByRewardId: Record<string, number> }) => {
-      if (!family) throw new Error("No family");
-
-      const { error } = await supabase
-        .from("family_config")
-        .update({
-          enabled_rewards: data.enabledRewards,
-          cost_by_reward_id: data.costByRewardId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("family_id", family.familyId);
-
-      if (error) throw error;
+    mutationFn: async (_data: { enabledRewards: Record<string, boolean>; costByRewardId: Record<string, number> }) => {
+      // Phase 2: persist to family_config key/value store
+      // For now, catalog config is frontend-only defaults
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["family_config"] });
@@ -479,49 +511,22 @@ export function useUpdateSettings() {
       if (!family) throw new Error("No family");
 
       const updateData: any = {};
-      if (settings.parentEmail !== undefined) updateData.parent_email = settings.parentEmail;
+      if (settings.parentEmail !== undefined) updateData.primary_parent_email = settings.parentEmail;
       if (settings.secondaryParentEmail !== undefined) updateData.secondary_parent_email = settings.secondaryParentEmail;
-      if (settings.allowanceEnabled !== undefined) updateData.allowance_enabled = settings.allowanceEnabled;
-      if (settings.pointsPerDollar !== undefined) updateData.points_per_dollar = settings.pointsPerDollar;
       if (settings.dailySummaryEnabled !== undefined) updateData.daily_summary_enabled = settings.dailySummaryEnabled;
       if (settings.dailySummaryTimeLocal !== undefined) updateData.daily_summary_time_local = settings.dailySummaryTimeLocal;
-      if (settings.dailySummaryTimezone !== undefined) updateData.daily_summary_timezone = settings.dailySummaryTimezone;
+      if (settings.dailySummaryTimezone !== undefined) updateData.timezone = settings.dailySummaryTimezone;
       updateData.updated_at = new Date().toISOString();
 
-      if (settings.allowanceEnabled !== undefined && settings.pointsPerDollar) {
-        const ppd = clampNumber(settings.pointsPerDollar, 50, 5000);
-        const { data: existing } = await supabase
-          .from("family_config")
-          .select("cost_by_reward_id, enabled_rewards")
-          .eq("family_id", family.familyId)
-          .single();
-
-        if (existing) {
-          const costMap = (existing.cost_by_reward_id as Record<string, number>) || {};
-          costMap["allow_1"] = ppd * 1;
-          costMap["allow_5"] = ppd * 5;
-          costMap["allow_10"] = ppd * 10;
-          updateData.cost_by_reward_id = costMap;
-
-          if (!settings.allowanceEnabled) {
-            const enabledMap = (existing.enabled_rewards as Record<string, boolean>) || {};
-            Object.keys(enabledMap).forEach(id => {
-              if (id.startsWith("allow_")) enabledMap[id] = false;
-            });
-            updateData.enabled_rewards = enabledMap;
-          }
-        }
-      }
-
       const { error } = await supabase
-        .from("family_config")
+        .from("family_settings")
         .update(updateData)
         .eq("family_id", family.familyId);
 
       if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["family_config"] });
+      queryClient.invalidateQueries({ queryKey: ["family_settings"] });
       toast({ title: "Settings saved!", description: "Your preferences have been updated." });
     },
     onError: (err: Error) => {
@@ -759,7 +764,7 @@ export function useFamilySummary(date?: string) {
         const pointsEarnedToday = eventsArr.reduce((sum: number, e: any) => sum + e.points_delta, 0);
 
         childSummaries.push({
-          childName: kid.name,
+          childName: kid.displayName,
           completedChores,
           missedChores,
           bonuses,
@@ -787,13 +792,13 @@ export function useDailySummary(date?: string) {
 
 export function useSendSummaryEmail() {
   const { toast } = useToast();
-  const { data: config } = useFamilyConfig();
+  const { data: settings } = useFamilySettings();
 
   return useMutation({
     mutationFn: async (summary: FamilySummary) => {
       const emails: string[] = [];
-      if (config?.parent_email) emails.push(config.parent_email);
-      if (config?.secondary_parent_email) emails.push(config.secondary_parent_email);
+      if (settings?.primary_parent_email) emails.push(settings.primary_parent_email);
+      if (settings?.secondary_parent_email) emails.push(settings.secondary_parent_email);
 
       if (emails.length === 0) {
         throw new Error("No parent emails configured. Please set at least one email in Settings.");

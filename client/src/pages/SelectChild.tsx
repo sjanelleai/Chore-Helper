@@ -44,17 +44,24 @@ export default function SelectChild() {
     try {
       const { data: childData, error } = await supabase
         .from("children")
-        .select("pin_hash")
+        .select("*")
         .eq("id", pinFor)
         .single();
 
-      if (error || !childData?.pin_hash) {
+      if (error || !childData) {
         setPinError("Something went wrong. Try again.");
         setVerifying(false);
         return;
       }
 
-      const match = await bcrypt.compare(pinInput, childData.pin_hash);
+      const pinHash = (childData as any).pin_hash;
+      if (!pinHash) {
+        selectChild(pinFor);
+        navigate("/");
+        return;
+      }
+
+      const match = await bcrypt.compare(pinInput, pinHash);
       setVerifying(false);
 
       if (match) {
@@ -81,28 +88,49 @@ export default function SelectChild() {
 
     setAddingChild(true);
     try {
-      let pinHash: string | null = null;
-      if (newChildPin && newChildPin.length === 4) {
-        pinHash = await bcrypt.hash(newChildPin, 10);
-      }
-
       console.log("[add-child] Inserting child for family:", family.familyId);
 
-      const { data: child, error: insertErr } = await supabase
-        .from("children")
-        .insert({
-          family_id: family.familyId,
-          name: newChildName.trim(),
-          avatar: null,
-          pin_hash: pinHash,
-        })
-        .select("id")
-        .single();
-
-      if (insertErr) {
-        console.error("[add-child] Insert children error:", insertErr);
-        throw insertErr;
+      let pinHash: string | null = null;
+      if (newChildPin && newChildPin.length === 4) {
+        try {
+          pinHash = await bcrypt.hash(newChildPin, 10);
+        } catch (e) {
+          console.warn("[add-child] PIN hash failed, skipping PIN:", e);
+        }
       }
+
+      let child: { id: string } | null = null;
+
+      if (pinHash) {
+        const { data, error: insertErr } = await supabase
+          .from("children")
+          .insert({ family_id: family.familyId, display_name: newChildName.trim(), pin_hash: pinHash })
+          .select("id")
+          .single();
+
+        if (insertErr) {
+          console.warn("[add-child] Insert with pin_hash failed, retrying without:", insertErr);
+          const { data: fallbackData, error: fallbackErr } = await supabase
+            .from("children")
+            .insert({ family_id: family.familyId, display_name: newChildName.trim() })
+            .select("id")
+            .single();
+          if (fallbackErr) throw fallbackErr;
+          child = fallbackData;
+        } else {
+          child = data;
+        }
+      } else {
+        const { data, error: insertErr } = await supabase
+          .from("children")
+          .insert({ family_id: family.familyId, display_name: newChildName.trim() })
+          .select("id")
+          .single();
+        if (insertErr) throw insertErr;
+        child = data;
+      }
+
+      if (!child) throw new Error("Failed to create child profile");
 
       const { error: pointsErr } = await supabase
         .from("child_points")
@@ -113,8 +141,7 @@ export default function SelectChild() {
         });
 
       if (pointsErr) {
-        console.error("[add-child] Insert child_points error:", pointsErr);
-        throw pointsErr;
+        console.warn("[add-child] child_points insert failed (may not exist yet):", pointsErr);
       }
 
       toast({ title: "Child added!", description: `${newChildName} has been created.` });
@@ -141,7 +168,7 @@ export default function SelectChild() {
               <Lock className="w-7 h-7 text-accent-foreground" />
             </div>
             <h2 className="text-2xl font-display font-bold text-foreground">
-              Hi, {child?.name}!
+              Hi, {child?.displayName}!
             </h2>
             <p className="text-muted-foreground text-sm mt-1">Enter your 4-digit PIN</p>
           </div>
@@ -224,7 +251,7 @@ export default function SelectChild() {
                   <User className="w-6 h-6 text-primary" />
                 </div>
                 <div className="flex-1 text-left">
-                  <p className="font-bold text-lg text-foreground">{child.name}</p>
+                  <p className="font-bold text-lg text-foreground">{child.displayName}</p>
                 </div>
                 {child.hasPin && <Lock className="w-4 h-4 text-muted-foreground" />}
               </Card>

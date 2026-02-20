@@ -9,7 +9,7 @@ interface FamilyProfile {
 
 interface ChildProfile {
   id: string;
-  name: string;
+  displayName: string;
   avatar: string | null;
   hasPin: boolean;
 }
@@ -22,6 +22,7 @@ interface AuthContextType {
   activeChildId: string | null;
   activeChild: ChildProfile | null;
   loading: boolean;
+  authError: string | null;
   signUp: (email: string, pin: string, name?: string) => Promise<{ error: string | null; needsVerification?: boolean }>;
   signIn: (email: string, pin: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
@@ -42,63 +43,76 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
     localStorage.getItem("activeChildId")
   );
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  const loadFamilyData = useCallback(async (userId: string, retries = 3) => {
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      const { data: profile, error: pErr } = await supabase
-        .from("parent_profiles")
-        .select("family_id, parent_display_name")
-        .eq("user_id", userId)
-        .single();
+  const loadChildren = useCallback(async (familyId: string) => {
+    const { data: kids, error } = await supabase
+      .from("children")
+      .select("*")
+      .eq("family_id", familyId)
+      .order("created_at", { ascending: true });
 
-      if (pErr || !profile) {
-        if (attempt < retries) {
-          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-          continue;
-        }
-
-        console.log("[auth] No parent_profiles row found after retries. Attempting fallback family creation...");
-        const created = await createFamilyFallback(userId);
-        if (created) {
-          setFamily({
-            familyId: created.familyId,
-            parentDisplayName: created.displayName,
-          });
-          setChildrenList([]);
-          return;
-        }
-
-        setFamily(null);
-        setChildrenList([]);
-        return;
-      }
-
-      setFamily({
-        familyId: profile.family_id,
-        parentDisplayName: profile.parent_display_name || "Parent",
-      });
-
-      const { data: kids } = await supabase
-        .from("children")
-        .select("id, name, avatar, pin_hash")
-        .eq("family_id", profile.family_id)
-        .order("created_at", { ascending: true });
-
-      if (kids) {
-        setChildrenList(
-          kids.map((k: any) => ({
-            id: k.id,
-            name: k.name,
-            avatar: k.avatar,
-            hasPin: !!k.pin_hash,
-          }))
-        );
-      }
+    if (error) {
+      console.error("[auth] Failed to load children:", error);
+      setChildrenList([]);
       return;
+    }
+
+    if (kids) {
+      setChildrenList(
+        kids.map((k: any) => ({
+          id: k.id,
+          displayName: k.display_name || k.name || "Child",
+          avatar: k.avatar ?? null,
+          hasPin: !!(k.pin_hash),
+        }))
+      );
     }
   }, []);
 
-  const createFamilyFallback = async (_userId: string): Promise<{ familyId: string; displayName: string } | null> => {
+  const loadFamilyData = useCallback(async (userId: string) => {
+    setAuthError(null);
+
+    const { data: membership, error: mErr } = await supabase
+      .from("family_members")
+      .select("family_id, role")
+      .eq("user_id", userId)
+      .limit(1)
+      .single();
+
+    if (mErr || !membership) {
+      console.log("[auth] No family_members row found. Calling ensure_family_exists RPC...");
+      const created = await createFamilyFallback();
+      if (created) {
+        setFamily({
+          familyId: created.familyId,
+          parentDisplayName: created.displayName,
+        });
+        setChildrenList([]);
+        return;
+      }
+      setFamily(null);
+      setChildrenList([]);
+      return;
+    }
+
+    const familyId = membership.family_id;
+
+    const { data: fam } = await supabase
+      .from("families")
+      .select("name")
+      .eq("id", familyId)
+      .single();
+
+    setFamily({
+      familyId,
+      parentDisplayName: fam?.name || "My Family",
+    });
+
+    await loadChildren(familyId);
+  }, [loadChildren]);
+
+  const createFamilyFallback = async (): Promise<{ familyId: string; displayName: string } | null> => {
     try {
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       const displayName = currentUser?.user_metadata?.name || "Parent";
@@ -108,26 +122,35 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
       });
 
       if (error) {
-        console.error("[auth] Fallback RPC ensure_family_exists failed:", error);
+        const errMsg = `Family setup failed: ${error.message}${error.details ? ` (${error.details})` : ""}`;
+        console.error("[auth] ensure_family_exists RPC failed:", error);
+        setAuthError(errMsg);
         return null;
       }
 
       const result = typeof data === "string" ? JSON.parse(data) : data;
 
       if (result?.error) {
-        console.error("[auth] Fallback RPC returned error:", result.error);
+        const errMsg = `Family setup failed: ${result.error}`;
+        console.error("[auth] ensure_family_exists returned error:", result.error);
+        setAuthError(errMsg);
         return null;
       }
 
       if (result?.family_id) {
-        console.log("[auth] Fallback: successfully ensured family exists", result);
+        console.log("[auth] Family created successfully:", result);
+        setAuthError(null);
         return { familyId: result.family_id, displayName: result.display_name || displayName };
       }
 
-      console.error("[auth] Fallback RPC returned unexpected data:", result);
+      const errMsg = "Family setup returned unexpected data. Please try signing out and back in.";
+      console.error("[auth] ensure_family_exists returned unexpected data:", result);
+      setAuthError(errMsg);
       return null;
-    } catch (err) {
-      console.error("[auth] Fallback family creation failed", err);
+    } catch (err: any) {
+      const errMsg = `Family setup error: ${err?.message || "Unknown error"}`;
+      console.error("[auth] createFamilyFallback exception:", err);
+      setAuthError(errMsg);
       return null;
     }
   };
@@ -154,6 +177,7 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
         setFamily(null);
         setChildrenList([]);
         setActiveChildId(null);
+        setAuthError(null);
         localStorage.removeItem("activeChildId");
       }
     });
@@ -202,7 +226,7 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
   };
 
   const refreshChildren = async () => {
-    if (user) await loadFamilyData(user.id);
+    if (family) await loadChildren(family.familyId);
   };
 
   const refreshFamily = async () => {
@@ -221,6 +245,7 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
         activeChildId,
         activeChild,
         loading,
+        authError,
         signUp,
         signIn,
         signOut: signOutFn,

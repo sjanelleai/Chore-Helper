@@ -30,7 +30,7 @@ export default function Home() {
         <div className="flex items-center justify-between gap-2 mb-8 flex-wrap">
           <div>
             <h1 className="text-3xl font-display font-bold text-foreground" data-testid="text-greeting">
-              Hi, {activeChild?.name || "Champion"}!
+              Hi, {activeChild?.displayName || "Champion"}!
             </h1>
             <p className="text-muted-foreground font-medium">Ready to earn some points?</p>
           </div>
