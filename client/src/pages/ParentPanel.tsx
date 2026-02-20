@@ -368,6 +368,7 @@ function detectTimezone() {
 
 function SettingsSection() {
   const { data: userState } = useUserState();
+  const { user } = useAuth();
   const updateSettings = useUpdateSettings();
   const [email, setEmail] = useState("");
   const [secondaryEmail, setSecondaryEmail] = useState("");
@@ -379,7 +380,7 @@ function SettingsSection() {
 
   useEffect(() => {
     if (userState) {
-      setEmail(userState.parentEmail || "");
+      setEmail(userState.parentEmail || user?.email || "");
       setSecondaryEmail(userState.secondaryParentEmail || "");
       setAllowance(userState.allowanceEnabled);
       setPointsPerDollar(userState.pointsPerDollar);
@@ -387,7 +388,7 @@ function SettingsSection() {
       setSummaryTime(userState.dailySummaryTimeLocal);
       setSummaryTimezone(userState.dailySummaryTimezone);
     }
-  }, [userState?.parentEmail, userState?.secondaryParentEmail, userState?.allowanceEnabled, userState?.pointsPerDollar, userState?.dailySummaryEnabled, userState?.dailySummaryTimeLocal, userState?.dailySummaryTimezone]);
+  }, [userState?.parentEmail, userState?.secondaryParentEmail, userState?.allowanceEnabled, userState?.pointsPerDollar, userState?.dailySummaryEnabled, userState?.dailySummaryTimeLocal, userState?.dailySummaryTimezone, user?.email]);
 
   const emailsMatch = !!(email.trim() && secondaryEmail.trim() && email.trim().toLowerCase() === secondaryEmail.trim().toLowerCase());
 
