@@ -47,9 +47,10 @@ async function getCredentials() {
 async function getUncachableSendGridClient() {
   const { apiKey, email } = await getCredentials();
   sgMail.setApiKey(apiKey);
+  const fromEmail = process.env.SENDGRID_FROM_EMAIL || email;
   return {
     client: sgMail,
-    fromEmail: email
+    fromEmail
   };
 }
 

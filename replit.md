@@ -103,6 +103,7 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - Frontend computes family-wide summary (all children) using Supabase queries
 - Summary data + recipient emails POSTed to Express backend `/api/summary/send`
 - Backend formats HTML email and sends via SendGrid to all configured parent emails
+- **From email**: Uses `SENDGRID_FROM_EMAIL` env var (currently `homequest@oibrigado.com`), falls back to connector-provided email
 - Supports primary + secondary parent email (both stored in family_settings)
 - Email shows per-child breakdown: completed/missed chores, bonuses, purchases, points, balance
 - "Test Nightly Email Now" button in Parent Panel triggers immediate send for pipeline validation

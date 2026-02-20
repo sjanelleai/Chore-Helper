@@ -46,3 +46,6 @@ integrations = ["sendgrid:1.0.0"]
 
 [userenv.production]
 VITE_SITE_URL = "https://chore-helper.oibrigado.com"
+
+[userenv.shared]
+SENDGRID_FROM_EMAIL = "homequest@oibrigado.com"
