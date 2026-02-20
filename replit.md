@@ -70,6 +70,7 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `redeem_reward(p_child_id, p_reward_id)` - Redeems reward, checks balance, writes to reward_redemptions + points_ledger atomically.
 - `grant_bonus(p_child_id, p_points, p_reason)` - Awards bonus points, writes to points_ledger.
 - `seed_default_catalog(p_family_id)` - Seeds chore_catalog + reward_catalog from STARTER constants if empty. Called automatically by frontend hooks.
+- `remove_child(p_child_id)` - Deletes a child and all associated data (daily_status, points_ledger, reward_redemptions, child_badges). Only callable by family members.
 
 ## Key Pages
 - `/login` - Parent sign in (email + 6-digit PIN)
@@ -92,6 +93,7 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `supabase-setup.sql` - Original database setup (reference)
 - `supabase-migration-v2.sql` - Updated RPCs for family_members/family_settings schema
 - `supabase-migration-v3.sql` - Database-backed catalogs, points_ledger, RPCs
+- `supabase-migration-v4.sql` - email_send_log table, remove_child RPC, recommended indexes
 - `client/src/lib/supabase.ts` - Supabase client configuration
 - `client/src/lib/auth-context.tsx` - Auth provider with session management + ensure_family_exists fallback
 - `client/src/hooks/use-data.ts` - All data hooks (Supabase queries/mutations via RPCs)
@@ -100,14 +102,31 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `shared/schema.ts` - TypeScript types (EnabledChore, EnabledReward, ChoreCatalogRow, RewardCatalogRow, PointsLedgerRow, etc.)
 
 ## Daily Summary Email System
-- Frontend computes family-wide summary (all children) using Supabase queries
-- Summary data + recipient emails POSTed to Express backend `/api/summary/send`
-- Backend formats HTML email and sends via SendGrid to all configured parent emails
+
+### Architecture (Option 2: Supabase Cron + Edge Functions + SendGrid)
+- **Scheduled delivery**: Supabase Cron runs `nightly-summary-runner` Edge Function every 15 minutes
+- **Runner logic**: Finds families due (based on daily_summary_time_local + timezone), dedupes via `email_send_log` table, triggers `send-family-summary` for each due family
+- **Sender logic**: Queries Supabase for children/chores/points/redemptions, sends via SendGrid Dynamic Template, logs result to `email_send_log`
+- **No Replit backend needed** for scheduled sends — all handled by Supabase Edge Functions
+
+### Edge Functions (deploy to Supabase)
+- `supabase/functions/nightly-summary-runner/index.ts` — Cron target, finds due families
+- `supabase/functions/send-family-summary/index.ts` — Builds summary, sends via SendGrid API
+
+### Supabase Secrets Required
+- `SENDGRID_API_KEY`, `SENDGRID_TEMPLATE_DAILY_SUMMARY`, `SENDGRID_FROM_EMAIL`, `SENDGRID_FROM_NAME`
+
+### Manual Test Path (still available)
+- "Test Nightly Email Now" button in Parent Panel still calls Replit backend `POST /api/summary/send`
 - **From email**: Uses `SENDGRID_FROM_EMAIL` env var (currently `homequest@oibrigado.com`), falls back to connector-provided email
-- Supports primary + secondary parent email (both stored in family_settings)
-- Email shows per-child breakdown: completed/missed chores, bonuses, purchases, points, balance
-- "Test Nightly Email Now" button in Parent Panel triggers immediate send for pipeline validation
-- Settings in family_settings: daily_summary_enabled, daily_summary_time_local (HH:MM), timezone (IANA)
+
+### Database
+- `email_send_log` table: family_id, date_key, status (sent/failed), error, created_at — unique on (family_id, date_key)
+- Migration: `supabase-migration-v4.sql`
+
+### Settings (family_settings)
+- daily_summary_enabled, daily_summary_time_local (HH:MM), timezone (IANA)
+- primary_parent_email, secondary_parent_email
 
 ## Parent Settings Behavior
 - Primary parent email: auto-filled from signup email (server-side via trigger/RPC), editable in settings

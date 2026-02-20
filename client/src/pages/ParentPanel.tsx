@@ -7,6 +7,7 @@ import {
 } from "@/hooks/use-data";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
+import { useToast } from "@/hooks/use-toast";
 import { Header } from "@/components/Header";
 import { CATALOG } from "@shared/catalog";
 import { Card } from "@/components/ui/card";
@@ -16,7 +17,7 @@ import {
   Mail, Settings, Star,
   ChevronDown, ChevronUp, Loader2,
   CheckSquare, ShoppingBag, UserPlus, LogOut, Users,
-  Clock, Globe, Zap,
+  Clock, Globe, Zap, Trash2,
 } from "lucide-react";
 
 function BonusSection() {
@@ -622,6 +623,27 @@ function ChildManagementSection() {
   const [newChildPin, setNewChildPin] = useState("");
   const [isAdding, setIsAdding] = useState(false);
   const [addError, setAddError] = useState("");
+  const [removingChildId, setRemovingChildId] = useState<string | null>(null);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  const { toast } = useToast();
+
+  const handleRemoveChild = async (childId: string) => {
+    setRemovingChildId(childId);
+    try {
+      const { data, error } = await supabase.rpc("remove_child", { p_child_id: childId });
+      if (error) throw error;
+      const result = typeof data === "string" ? JSON.parse(data) : data;
+      if (result?.error) throw new Error(result.error);
+
+      await refreshChildren();
+      toast({ title: "Child removed", description: "Child profile and all associated data have been deleted." });
+      setConfirmRemoveId(null);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message || "Failed to remove child", variant: "destructive" });
+    } finally {
+      setRemovingChildId(null);
+    }
+  };
 
   const handleAddChild = async () => {
     if (!newChildName.trim() || !family) return;
@@ -676,19 +698,52 @@ function ChildManagementSection() {
                 </p>
               </div>
             </div>
-            {kid.id !== activeChild?.id && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => selectChild(kid.id)}
-                data-testid={`button-switch-to-${kid.displayName}`}
-              >
-                Switch
-              </Button>
-            )}
-            {kid.id === activeChild?.id && (
-              <span className="text-xs font-bold text-primary px-2 py-1 bg-primary/10 rounded-full">Active</span>
-            )}
+            <div className="flex items-center gap-2 shrink-0">
+              {kid.id !== activeChild?.id && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => selectChild(kid.id)}
+                  data-testid={`button-switch-to-${kid.displayName}`}
+                >
+                  Switch
+                </Button>
+              )}
+              {kid.id === activeChild?.id && (
+                <span className="text-xs font-bold text-primary px-2 py-1 bg-primary/10 rounded-full">Active</span>
+              )}
+              {confirmRemoveId === kid.id ? (
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => handleRemoveChild(kid.id)}
+                    disabled={removingChildId === kid.id}
+                    data-testid={`button-confirm-remove-${kid.displayName}`}
+                  >
+                    {removingChildId === kid.id ? <Loader2 className="w-3 h-3 animate-spin" /> : "Yes"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setConfirmRemoveId(null)}
+                    data-testid={`button-cancel-remove-${kid.displayName}`}
+                  >
+                    No
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmRemoveId(kid.id)}
+                  className="text-muted-foreground hover:text-destructive"
+                  data-testid={`button-remove-${kid.displayName}`}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              )}
+            </div>
           </div>
         ))}
       </div>
