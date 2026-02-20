@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
+import { ensureCatalogSeeded } from "./catalogSeed";
+import { queryClient } from "./queryClient";
 
 interface FamilyProfile {
   familyId: string;
@@ -23,6 +25,8 @@ interface AuthContextType {
   activeChild: ChildProfile | null;
   loading: boolean;
   authError: string | null;
+  catalogSeedError: string | null;
+  retryCatalogSeed: () => Promise<void>;
   signUp: (email: string, pin: string, name?: string) => Promise<{ error: string | null; needsVerification?: boolean }>;
   signIn: (email: string, pin: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
@@ -44,6 +48,21 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
   );
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [catalogSeedError, setCatalogSeedError] = useState<string | null>(null);
+
+  const seedCatalogForFamily = useCallback(async (familyId: string) => {
+    try {
+      setCatalogSeedError(null);
+      const result = await ensureCatalogSeeded({ supabase, queryClient, familyId });
+      if (result.seeded) {
+        console.log("[auth] Default catalog seeded for family:", familyId);
+      }
+    } catch (err: any) {
+      const msg = [err?.message, err?.details, err?.hint].filter(Boolean).join(" | ");
+      console.error("[auth] Catalog seeding failed:", msg, err);
+      setCatalogSeedError(msg || "Failed to set up default chores and rewards.");
+    }
+  }, []);
 
   const loadChildren = useCallback(async (familyId: string) => {
     const { data: kids, error } = await supabase
@@ -89,6 +108,7 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
           parentDisplayName: created.displayName,
         });
         setChildrenList([]);
+        await seedCatalogForFamily(created.familyId);
         return;
       }
       setFamily(null);
@@ -110,7 +130,8 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
     });
 
     await loadChildren(familyId);
-  }, [loadChildren]);
+    await seedCatalogForFamily(familyId);
+  }, [loadChildren, seedCatalogForFamily]);
 
   const createFamilyFallback = async (): Promise<{ familyId: string; displayName: string } | null> => {
     try {
@@ -233,6 +254,10 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
     if (user) await loadFamilyData(user.id);
   };
 
+  const retryCatalogSeed = async () => {
+    if (family) await seedCatalogForFamily(family.familyId);
+  };
+
   const activeChild = childrenList.find((c) => c.id === activeChildId) || null;
 
   return (
@@ -246,6 +271,8 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
         activeChild,
         loading,
         authError,
+        catalogSeedError,
+        retryCatalogSeed,
         signUp,
         signIn,
         signOut: signOutFn,

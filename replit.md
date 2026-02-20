@@ -57,7 +57,7 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 | `child_badges` | Earned achievement badges |
 
 ### Key Design Decisions
-- **Catalog is database-backed**: chore_catalog and reward_catalog tables store per-family catalog items. Auto-seeded from CATALOG constants via `seed_default_catalog` RPC when empty.
+- **Catalog is database-backed**: chore_catalog and reward_catalog tables store per-family catalog items. Auto-seeded via `ensureCatalogSeeded()` in auth bootstrap (right after familyId is resolved). The `seed_default_catalog` RPC is idempotent — safe to call multiple times.
 - **Points are derived**: No separate child_points table. Points computed from `SUM(points_delta)` on points_ledger.
 - **All mutations go through RPCs**: toggle_chore, redeem_reward, grant_bonus, add_child — for security and business logic consistency.
 - `family_settings` stores email + daily summary preferences only (NOT catalog config)
@@ -72,7 +72,7 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `toggle_chore(p_child_id, p_chore_id, p_date_key)` - Toggles chore completion via daily_status_v2 (insert row = completed, delete row = uncompleted) + writes to points_ledger atomically.
 - `redeem_reward(p_child_id, p_reward_id)` - Redeems reward, checks balance, writes to reward_redemptions + points_ledger atomically.
 - `grant_bonus(p_child_id, p_points, p_reason)` - Awards bonus points, writes to points_ledger.
-- `seed_default_catalog(p_family_id)` - Seeds chore_catalog + reward_catalog from STARTER constants if empty. Called automatically by frontend hooks.
+- `seed_default_catalog(p_family_id)` - Seeds chore_catalog + reward_catalog from STARTER constants if empty. Idempotent. Called automatically by `ensureCatalogSeeded()` during auth bootstrap.
 - `remove_child(p_child_id)` - Deletes a child and all associated data (daily_status_v2, daily_status, points_ledger, reward_redemptions, child_badges). Only callable by family members.
 
 ## Key Pages
@@ -90,7 +90,8 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - STARTER_CHORES / STARTER_REWARDS define defaults for new families (seeded to DB via `seed_default_catalog` RPC)
 - **Runtime catalogs** served from `chore_catalog` and `reward_catalog` DB tables
 - Parents can toggle items on/off and set custom points/costs via Parent Panel (writes directly to catalog tables)
-- `useChoreCatalog()` and `useRewardCatalog()` hooks auto-seed on first load if catalog is empty
+- `useChoreCatalog()` and `useRewardCatalog()` hooks are pure readers (no seeding logic)
+- Seeding handled centrally by `ensureCatalogSeeded()` in auth bootstrap
 
 ## Key Files
 - `supabase-setup.sql` - Original database setup (reference)
@@ -99,7 +100,8 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `supabase-migration-v4.sql` - email_send_log table, remove_child RPC, recommended indexes
 - `supabase-migration-v5.sql` - CRITICAL: daily_status_v2 (per-chore-row), catalog title columns, rewritten toggle_chore RPC
 - `client/src/lib/supabase.ts` - Supabase client configuration
-- `client/src/lib/auth-context.tsx` - Auth provider with session management + ensure_family_exists fallback
+- `client/src/lib/catalogSeed.ts` - Centralized catalog seeding (ensureCatalogSeeded) called during auth bootstrap
+- `client/src/lib/auth-context.tsx` - Auth provider with session management + ensure_family_exists fallback + catalog seeding
 - `client/src/hooks/use-data.ts` - All data hooks (Supabase queries/mutations via RPCs)
 - `client/src/pages/ParentPanel.tsx` - Parent panel with settings, child management, email config
 - `shared/catalog.ts` - Master chore/reward catalogs (seeding source)

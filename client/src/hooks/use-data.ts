@@ -108,31 +108,7 @@ export function useChoreCatalog() {
         .order("sort_order", { ascending: true });
 
       if (error) throw error;
-
-      if (!data || data.length === 0) {
-        console.log("[use-data] No chore catalog found, seeding defaults...");
-        const { data: seedResult, error: seedErr } = await supabase.rpc("seed_default_catalog", {
-          p_family_id: family!.familyId,
-        });
-
-        if (seedErr) {
-          console.error("[use-data] Failed to seed catalog:", seedErr);
-          return [];
-        }
-
-        console.log("[use-data] Seed result:", seedResult);
-
-        const { data: refetched, error: refetchErr } = await supabase
-          .from("chore_catalog")
-          .select("*")
-          .eq("family_id", family!.familyId)
-          .order("sort_order", { ascending: true });
-
-        if (refetchErr) throw refetchErr;
-        return (refetched || []) as ChoreCatalogItem[];
-      }
-
-      return data as ChoreCatalogItem[];
+      return (data || []) as ChoreCatalogItem[];
     },
   });
 }
@@ -150,21 +126,7 @@ export function useRewardCatalog() {
         .order("sort_order", { ascending: true });
 
       if (error) throw error;
-
-      if (!data || data.length === 0) {
-        await supabase.rpc("seed_default_catalog", { p_family_id: family!.familyId });
-
-        const { data: refetched, error: refetchErr } = await supabase
-          .from("reward_catalog")
-          .select("*")
-          .eq("family_id", family!.familyId)
-          .order("sort_order", { ascending: true });
-
-        if (refetchErr) throw refetchErr;
-        return (refetched || []) as RewardCatalogItem[];
-      }
-
-      return data as RewardCatalogItem[];
+      return (data || []) as RewardCatalogItem[];
     },
   });
 }
