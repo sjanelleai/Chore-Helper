@@ -1,0 +1,352 @@
+You nailed the root cause: your live Supabase schema and your frontend contract are mismatched in two “hard break” places (daily_status shape and catalog name vs title). That’s why chores/rewards disappeared and why completion state looks broken.
+
+Below is a technical handoff doc you can paste to your developer. It includes the target contract, the migration strategy, and the UI navigation requirement. No fluff, no theory.
+
+⸻
+
+HomeQuest / Chore Helper — Supabase Alignment Migration (v5) + Frontend Contract
+
+Objective
+
+Make Supabase the single source of truth for:
+	•	Families + membership + kids
+	•	Chore & reward catalogs
+	•	Daily completion tracking
+	•	Points + redemptions
+	•	Parent settings (emails/timezone/schedule)
+	•	Email logs for nightly summary scheduling
+
+Also: implement persistent navigation (bottom tabs on mobile, left sidebar on desktop) across the entire app.
+
+⸻
+
+Current Breaks (must fix)
+
+A) daily_status data model mismatch
+	•	DB today: array-based model (one row per child/day with completed_chore_ids uuid[])
+	•	Frontend today: expects per-chore rows (selects chore_id, completed)
+✅ Result: completion queries return nothing → chores appear broken.
+
+B) Catalog name mismatch
+	•	DB today: chore_catalog.name, reward_catalog.name
+	•	Frontend today: uses .title
+✅ Result: chores/rewards not rendering correctly (blank or missing).
+
+⸻
+
+Decision (v5 Contract)
+
+We will standardize on the per-chore-row model and align naming to frontend:
+
+1) daily_status = per chore per day
+
+Table shape (contract):
+	•	child_id uuid
+	•	chore_id uuid
+	•	date_key date
+	•	completed boolean
+
+Primary key: (child_id, chore_id, date_key)
+
+2) Catalog columns use title
+	•	chore_catalog.title (not name)
+	•	reward_catalog.title (not name)
+	•	reward_catalog.requires_parent_approval (keep as-is if already defined that way)
+
+⸻
+
+Frontend Expected Behavior (QA Contract)
+
+On Login / Parent Zone Load
+	1.	Use Supabase session (auth.getSession()).
+	2.	Resolve family:
+	•	Query family_members where user_id = auth.uid()
+	•	If no row exists, call RPC ensure_family_exists()
+	3.	Load:
+	•	children for family_id
+	•	family_settings for family_id
+	•	chore_catalog and reward_catalog for family_id
+
+Add Child
+	•	Call RPC add_child(display_name) OR insert into children with family_id + display_name (depending on current design)
+	•	Refresh children list immediately.
+
+Chores Screen
+	•	Fetch catalog:
+	•	select * from chore_catalog where family_id = ? order by sort_order
+	•	Fetch completion state for selected child and today:
+	•	select chore_id, completed from daily_status where child_id = ? and date_key = today
+	•	Render: chore items + completed status
+
+Toggle Chore (single source of truth)
+
+Frontend calls RPC: toggle_chore(child_id, chore_id, date_key)
+	•	Returns { ok: true, completed: boolean }
+	•	UI updates local cache and refetches daily_status for that child/day
+
+Rewards Screen
+	•	Fetch reward catalog
+	•	Fetch points (sum ledger)
+	•	Redeem calls RPC redeem_reward(child_id, reward_id) → creates redemption + ledger entry
+
+Parent Settings
+	•	Reads/writes family_settings:
+	•	primary_parent_email, secondary_parent_email
+	•	daily_summary_enabled, daily_summary_time_local, timezone
+	•	Primary email auto-fills from signup email if blank (either via RPC/trigger or on first save).
+
+⸻
+
+Navigation Requirement (Persistent Menu)
+
+Behavior
+	•	Navigation must be always visible and consistent across routes.
+	•	Mobile: bottom tab bar
+	•	Desktop/tablet: left sidebar
+
+Implementation pattern
+	•	Introduce a single AppLayout wrapper that includes navigation + <Outlet/> (or equivalent).
+	•	Ensure all feature pages render inside this layout (no pages should bypass layout unless login/signup).
+	•	The nav highlights active route.
+	•	“Back” should not be required to access core pages.
+
+⸻
+
+Supabase Work Required (v5 Migration)
+
+This is the only thing you need to run in Supabase: a v5 SQL migration that:
+	1.	Creates the new daily_status table (per-chore model)
+	2.	Migrates old completed_chore_ids data into the new table (optional but recommended)
+	3.	Renames catalog columns name → title (or creates title + backfills)
+	4.	Updates RPC toggle_chore to use the new model
+	5.	Ensures RLS policies match existing is_family_member(family_id) behavior
+
+There is no “connect databases” query in Supabase. Replit/Frontend “connects” to Supabase via env vars + keys. The only DB-side work is running the migration SQL.
+
+⸻
+
+v5 SQL Migration (Run in Supabase SQL Editor)
+
+This script is written to be safe and forward-compatible. It does not require dropping your entire DB. It adds new structures and migrates where possible.
+
+-- ============================================================
+-- HomeQuest — Schema Migration v5
+-- Align to per-chore daily_status + catalog title columns
+-- ============================================================
+
+begin;
+
+-- ------------------------------------------------------------
+-- 1) Catalog: ensure title columns exist and are populated
+-- ------------------------------------------------------------
+
+-- Chore catalog: name -> title
+alter table if exists public.chore_catalog
+  add column if not exists title text;
+
+update public.chore_catalog
+set title = coalesce(title, name)
+where title is null;
+
+-- Reward catalog: name -> title
+alter table if exists public.reward_catalog
+  add column if not exists title text;
+
+update public.reward_catalog
+set title = coalesce(title, name)
+where title is null;
+
+-- Optional: if you want to fully standardize and remove name later,
+-- do it in a later migration after frontend is confirmed stable.
+
+-- ------------------------------------------------------------
+-- 2) Create new daily_status table (per chore per day)
+-- ------------------------------------------------------------
+
+create table if not exists public.daily_status_v2 (
+  child_id uuid not null references public.children(id) on delete cascade,
+  chore_id uuid not null references public.chore_catalog(id) on delete cascade,
+  date_key date not null,
+  completed boolean not null default true,
+  created_at timestamptz not null default now(),
+  primary key (child_id, chore_id, date_key)
+);
+
+create index if not exists idx_daily_status_v2_child_day
+  on public.daily_status_v2 (child_id, date_key);
+
+-- Enable RLS
+alter table public.daily_status_v2 enable row level security;
+
+-- Policies (aligned to existing helper: is_family_member(family_id))
+-- Assumes children has family_id and RLS helper exists.
+drop policy if exists daily_status_v2_select_member on public.daily_status_v2;
+drop policy if exists daily_status_v2_insert_member on public.daily_status_v2;
+drop policy if exists daily_status_v2_update_member on public.daily_status_v2;
+drop policy if exists daily_status_v2_delete_member on public.daily_status_v2;
+
+create policy daily_status_v2_select_member
+  on public.daily_status_v2
+  for select
+  using (
+    exists (
+      select 1
+      from public.children c
+      where c.id = daily_status_v2.child_id
+        and is_family_member(c.family_id)
+    )
+  );
+
+create policy daily_status_v2_insert_member
+  on public.daily_status_v2
+  for insert
+  with check (
+    exists (
+      select 1
+      from public.children c
+      where c.id = daily_status_v2.child_id
+        and is_family_member(c.family_id)
+    )
+  );
+
+create policy daily_status_v2_update_member
+  on public.daily_status_v2
+  for update
+  using (
+    exists (
+      select 1
+      from public.children c
+      where c.id = daily_status_v2.child_id
+        and is_family_member(c.family_id)
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from public.children c
+      where c.id = daily_status_v2.child_id
+        and is_family_member(c.family_id)
+    )
+  );
+
+create policy daily_status_v2_delete_member
+  on public.daily_status_v2
+  for delete
+  using (
+    exists (
+      select 1
+      from public.children c
+      where c.id = daily_status_v2.child_id
+        and is_family_member(c.family_id)
+    )
+  );
+
+-- ------------------------------------------------------------
+-- 3) Data migration from legacy daily_status (array model) if it exists
+-- ------------------------------------------------------------
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema='public'
+      and table_name='daily_status'
+      and column_name='completed_chore_ids'
+  ) then
+    insert into public.daily_status_v2 (child_id, chore_id, date_key, completed)
+    select
+      ds.child_id,
+      unnest(ds.completed_chore_ids) as chore_id,
+      ds.date_key,
+      true
+    from public.daily_status ds
+    where ds.completed_chore_ids is not null
+    on conflict do nothing;
+  end if;
+end $$;
+
+-- ------------------------------------------------------------
+-- 4) Replace toggle_chore RPC to use daily_status_v2
+-- ------------------------------------------------------------
+
+drop function if exists public.toggle_chore(uuid, uuid, date);
+
+create or replace function public.toggle_chore(
+  p_child_id uuid,
+  p_chore_id uuid,
+  p_date_key date
+)
+returns json
+language plpgsql
+security definer
+as $$
+declare
+  v_exists boolean;
+begin
+  -- If row exists, delete it (toggle off); else insert it (toggle on)
+  select exists(
+    select 1
+    from public.daily_status_v2
+    where child_id = p_child_id
+      and chore_id = p_chore_id
+      and date_key = p_date_key
+  ) into v_exists;
+
+  if v_exists then
+    delete from public.daily_status_v2
+    where child_id = p_child_id
+      and chore_id = p_chore_id
+      and date_key = p_date_key;
+
+    return json_build_object('ok', true, 'completed', false);
+  else
+    insert into public.daily_status_v2 (child_id, chore_id, date_key, completed)
+    values (p_child_id, p_chore_id, p_date_key, true)
+    on conflict do nothing;
+
+    return json_build_object('ok', true, 'completed', true);
+  end if;
+end;
+$$;
+
+grant execute on function public.toggle_chore(uuid, uuid, date) to authenticated;
+
+-- ------------------------------------------------------------
+-- 5) (Optional) Promote v2 as the canonical table name later
+-- ------------------------------------------------------------
+-- Keep both for now. Frontend should switch to daily_status_v2 immediately.
+-- Later migration can rename:
+--   alter table daily_status rename to daily_status_legacy;
+--   alter table daily_status_v2 rename to daily_status;
+
+commit;
+
+
+⸻
+
+What “connect databases” means here
+
+You do not run a Supabase query to “connect Replit to Supabase.”
+
+The connection is purely:
+	•	SUPABASE_URL
+	•	SUPABASE_ANON_KEY (frontend)
+	•	SUPABASE_SERVICE_ROLE_KEY (server/edge functions only, never in browser)
+
+Once those match the correct Supabase project, the app is connected.
+
+⸻
+
+Summary of Deliverables for Developer
+	1.	Run v5 migration SQL in Supabase SQL Editor.
+	2.	Update frontend to:
+	•	Read catalog title fields
+	•	Read completion state from daily_status_v2 per-chore rows
+	•	Use RPC toggle_chore(child_id, chore_id, date_key)
+	3.	Implement persistent navigation layout:
+	•	Bottom tabs mobile
+	•	Sidebar desktop
+	•	Layout wraps all authenticated pages
+
+⸻
