@@ -1,0 +1,218 @@
+Below is the exact implementation contract for Option 2 (Supabase schedules + Supabase stores user preferences + SendGrid delivers). This is written to hand directly to your developer.
+
+⸻
+
+HomeQuest — Nightly Summary Emails (Option 2)
+
+Goal: Parents choose a daily send time in the app. That time is stored in Supabase. A Supabase scheduled job runs frequently, determines which families are “due,” builds the daily summary from Supabase tables, then sends the email via SendGrid (Dynamic Template).
+
+High-level architecture
+	1.	Frontend updates family_settings (time, timezone, enabled, recipient emails).
+	2.	Supabase Cron calls nightly-summary-runner Edge Function every 15 minutes.
+	3.	Runner finds families “due now” based on their family_settings.
+	4.	Runner calls send-family-summary Edge Function for each due family.
+	5.	Sender queries Supabase for summary data, calls SendGrid API, logs to email_send_log.
+
+No Replit is required for sending.
+
+⸻
+
+1) Supabase tables used (source of truth)
+
+A) Existing tables (confirmed)
+	•	families (id, created_by, …)
+	•	family_members (family_id, user_id, role, …)
+	•	children (id, family_id, display_name, …)
+	•	family_settings (this is the configuration table)
+	•	daily_status (per child/chore/date row with completed boolean) (if you’ve migrated to this structure)
+	•	points_ledger (if you’ve migrated)
+	•	reward_redemptions (if you’ve migrated)
+	•	chore_catalog, reward_catalog (if you’ve migrated)
+
+B) family_settings fields required
+
+You already have these (per your audit), and they’re exactly what this feature uses:
+	•	primary_parent_email (text)
+	•	secondary_parent_email (text)
+	•	daily_summary_enabled (boolean)
+	•	daily_summary_time_local (text, "HH:MM")
+	•	timezone (text, e.g., "America/Denver")
+
+C) email_send_log (dedupe + history)
+
+You already have it. For clean future-proofing, standardize it to family_id + date_key (recommended).
+If your current primary key is (date_key, family_key), you can keep it, but the code should also store family_id to avoid ambiguity.
+
+Minimum fields used by this feature
+	•	family_id uuid (not null)
+	•	date_key date (not null)
+	•	status text (sent|failed)
+	•	error text
+	•	created_at timestamptz
+	•	optional: provider_message_id text
+
+⸻
+
+2) Frontend behavior (what the app must do)
+
+Parent Settings page / Parent Zone
+
+Frontend must:
+	1.	Read family_settings for the family.
+	2.	Allow edits to:
+	•	enabled toggle
+	•	send time (HH:MM)
+	•	timezone
+	•	primary/secondary emails
+	3.	Save updates to family_settings.
+
+Critical: The send time and timezone are the only “schedule inputs.” Everything else is derived at send-time from Supabase data.
+
+⸻
+
+3) Supabase scheduled job
+
+A) Create a Scheduled Trigger
+
+In Supabase Dashboard → Scheduled Triggers:
+	•	Cron: */15 * * * *
+	•	Target: Edge Function nightly-summary-runner
+
+(That’s the correct cron; if the UI auto-appends characters, keep the value the UI accepts, but the intended schedule is every 15 minutes.)
+
+⸻
+
+4) Edge Function 1 — nightly-summary-runner
+
+Purpose
+
+Runs frequently, finds families due in the current 15-minute window, prevents duplicates, triggers send function.
+
+Inputs
+
+None (called by cron).
+
+Logic
+	1.	Query families eligible to send:
+	•	join family_settings
+	•	daily_summary_enabled = true
+	•	at least one recipient email exists (primary_parent_email not null/empty or secondary not null/empty)
+	2.	For each family:
+	•	Determine “is due now”:
+	•	Get the current time in that family’s timezone
+	•	Convert both current time and daily_summary_time_local to minutes-since-midnight
+	•	Consider due if within [target, target + 15 minutes)
+	•	Determine date_key in that timezone (today’s date in that timezone)
+	•	Check email_send_log for (family_id, date_key). If exists → skip.
+	•	If not exists → call send-family-summary with family_id and date_key.
+
+Security
+
+This function uses SERVICE_ROLE key (server-side) and can bypass RLS safely.
+
+⸻
+
+5) Edge Function 2 — send-family-summary
+
+Purpose
+
+Build the summary for the family for date_key, then send email via SendGrid.
+
+Inputs (request body)
+	•	family_id (uuid)
+	•	date_key (YYYY-MM-DD)
+
+Steps
+	1.	Query family_settings for:
+	•	recipient emails
+	•	timezone
+	2.	Query children for family.
+	3.	Build “day summary” from your Supabase data model:
+	•	If you’re migrated:
+	•	chores completed from daily_status where date_key = X and completed = true
+	•	points from points_ledger where relevant time window / ref_type
+	•	redemptions from reward_redemptions for the day
+	•	catalog titles from chore_catalog / reward_catalog joins
+	•	If you’re not fully migrated yet, this function should match your current truth tables. (But your stated goal is to migrate chores/rewards/points to Supabase—so the sender should use those tables as the canonical source.)
+	4.	Format data into a single JSON object (dynamic_template_data).
+	5.	Call SendGrid mail/send with:
+	•	template_id
+	•	personalizations: [{ to: [{email}], dynamic_template_data }]
+	•	from: { email: apps@seanjanelle.com, name: "HomeQuest" } (must match your verified domain identity)
+	6.	Insert log row:
+	•	status sent on success
+	•	status failed + full error message on failure
+
+Security
+
+This function runs with service role and does not expose raw data to the browser. It is invoked only by the runner.
+
+⸻
+
+6) SendGrid configuration (delivery system)
+
+Required
+	•	A Dynamic Template for the daily summary email.
+	•	A single verified From address under your authenticated domain:
+	•	Example: apps@seanjanelle.com
+	•	SendGrid API Key stored in Supabase secrets.
+
+What the developer must set in Supabase
+
+In Supabase CLI or Dashboard secrets:
+	•	SENDGRID_API_KEY
+	•	SENDGRID_TEMPLATE_DAILY_SUMMARY
+	•	SENDGRID_FROM_EMAIL (e.g., apps@seanjanelle.com)
+	•	SENDGRID_FROM_NAME (e.g., HomeQuest)
+
+No database “connection” query is needed for SendGrid. It’s API + secrets only.
+
+⸻
+
+7) What you need to run in Supabase
+
+You do not need a query to “connect databases.”
+
+You only run SQL if any of these are missing:
+	•	email_send_log is missing required fields / correct keying
+	•	you need indexes for performance (optional but recommended)
+
+Recommended indexes (safe and helpful)
+	•	children (family_id)
+	•	family_settings (family_id)
+	•	family_members (user_id, family_id)
+	•	daily_status (child_id, date_key, chore_id) if using per-chore status
+	•	points_ledger (child_id, created_at) if summing daily points
+	•	reward_redemptions (child_id, created_at)
+
+⸻
+
+8) Expected QA outcomes (how you know it works)
+	1.	Parent sets:
+	•	enable daily summary
+	•	time + timezone
+	•	primary email
+	2.	Wait until the next cron window at/after that time.
+	3.	Confirm:
+	•	An entry appears in email_send_log for today
+	•	Email arrives formatted from SendGrid template
+	4.	Set a different time and confirm it sends at the new time on the next day.
+
+⸻
+
+9) Navigation UI requirement (always visible)
+
+Implement an “App Shell” layout so navigation is persistent:
+	•	Mobile: bottom tab bar
+	•	Desktop: left side rail
+
+This is a frontend layout change only:
+	•	Wrap all routes in a shared <AppShell> component.
+	•	<AppShell> renders <Outlet /> (or children) for page content and always renders nav.
+	•	Use CSS media queries (or Tailwind breakpoints) to switch between bottom vs side.
+
+No Supabase work required for this UI change.
+
+⸻
+
+This is the full build spec for Option 2: user-controlled time stored in Supabase, Supabase cron decides due families, SendGrid delivers, all sends logged in Supabase.
