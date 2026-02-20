@@ -1,0 +1,381 @@
+Below is the technical handoff document to move all app state to Supabase. It includes the expected database architecture, required SQL objects, and the exact frontend behavior contract to conform to the audited schema.
+
+⸻
+
+Chore Helper — Supabase-First Architecture & Frontend Behavior Contract
+
+Objective
+
+Move all persistence and “source of truth” to Supabase so the app supports:
+	•	Multiple children per family
+	•	Reliable chore completion tracking (no missing tables)
+	•	Durable points, rewards, and badges across devices/sessions
+	•	Parent settings stored and enforced centrally
+	•	Clean nightly summary data foundation (email sending is separate)
+
+⸻
+
+Current Supabase Tables (Source of Truth)
+
+public.families (RLS: enabled)
+
+Purpose: One row per family.
+	•	id uuid PK default gen_random_uuid()
+	•	created_by uuid NOT NULL FK -> auth.users.id
+	•	name text NULL
+	•	created_at timestamptz default now()
+	•	updated_at timestamptz default now()
+
+RLS
+	•	SELECT allowed for members via is_family_member(id)
+
+⸻
+
+public.family_members (RLS: enabled)
+
+Purpose: Membership linking users to families (parents/guardians/admins).
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL FK -> families.id
+	•	user_id uuid NOT NULL FK -> auth.users.id
+	•	role text NOT NULL default 'parent' CHECK role IN ('parent','guardian','admin')
+	•	created_at timestamptz default now()
+
+RLS
+	•	SELECT allowed for self or via is_family_member(family_id)
+	•	(If not present, must add INSERT policy for creating membership via RPC)
+
+⸻
+
+public.children (RLS: enabled)
+
+Purpose: Child profiles within a family.
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL FK -> families.id
+	•	display_name text NOT NULL
+	•	created_at timestamptz default now()
+
+RLS
+	•	SELECT allowed: is_family_member(family_id)
+	•	INSERT allowed: WITH CHECK is_family_member(family_id)
+
+⸻
+
+public.family_settings (RLS: enabled)
+
+Purpose: Parent portal settings and daily summary scheduling.
+	•	family_id uuid PK FK -> families.id
+	•	primary_parent_email text NULL
+	•	secondary_parent_email text NULL
+	•	daily_summary_enabled boolean NOT NULL default false
+	•	daily_summary_time_local text NULL default '19:30'
+	•	timezone text NULL default 'America/Denver'
+	•	created_at timestamptz default now()
+	•	updated_at timestamptz default now()
+
+RLS
+	•	SELECT: is_family_member(family_id)
+	•	UPDATE: is_family_member(family_id) with check
+
+⸻
+
+Legacy / Auxiliary Tables (not used for core flows)
+	•	public.family_config (RLS disabled): generic key/value jsonb store (not identity/settings source of truth)
+	•	public.email_send_log (RLS disabled): log for summary sending (schema currently mixed: has both family_id and family_key)
+
+⸻
+
+Required New Tables to Fully Move App State to Supabase
+
+1) public.chore_catalog
+
+Purpose: Family-configurable chores with points and categories.
+
+Columns:
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL FK -> families.id
+	•	category text NOT NULL
+	•	name text NOT NULL
+	•	points int NOT NULL default 10
+	•	active boolean NOT NULL default true
+	•	sort_order int NOT NULL default 0
+	•	created_at timestamptz NOT NULL default now()
+	•	updated_at timestamptz NOT NULL default now()
+
+Constraints / Indexes:
+	•	UNIQUE (family_id, category, name)
+	•	INDEX (family_id)
+	•	INDEX (family_id, active)
+
+RLS:
+	•	SELECT: is_family_member(family_id)
+	•	INSERT/UPDATE/DELETE: allow members with role in (‘parent’,‘guardian’,‘admin’) (implemented via policy or RPC security definer)
+
+⸻
+
+2) public.reward_catalog
+
+Purpose: Family-configurable rewards catalog, categorized, costly, optionally requiring approval.
+
+Columns:
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL FK -> families.id
+	•	category text NOT NULL
+	•	name text NOT NULL
+	•	cost int NOT NULL
+	•	requires_approval boolean NOT NULL default true
+	•	active boolean NOT NULL default true
+	•	sort_order int NOT NULL default 0
+	•	created_at timestamptz NOT NULL default now()
+	•	updated_at timestamptz NOT NULL default now()
+
+Constraints / Indexes:
+	•	UNIQUE (family_id, category, name)
+	•	INDEX (family_id)
+	•	INDEX (family_id, active)
+
+RLS:
+	•	SELECT: is_family_member(family_id)
+	•	INSERT/UPDATE/DELETE: parent/guardian/admin only
+
+⸻
+
+3) public.daily_status
+
+Purpose: Fixes the current production error. This is the authoritative “what chores were completed today” table.
+
+Columns:
+	•	child_id uuid NOT NULL FK -> children.id
+	•	date_key date NOT NULL
+	•	completed_chore_ids uuid[] NOT NULL default '{}'
+	•	points_earned int NOT NULL default 0
+	•	created_at timestamptz NOT NULL default now()
+	•	updated_at timestamptz NOT NULL default now()
+
+Primary key:
+	•	(child_id, date_key)
+
+Indexes:
+	•	INDEX (date_key)
+	•	INDEX (child_id)
+
+RLS:
+	•	SELECT: allow if is_family_member((select family_id from children where id = child_id))
+	•	INSERT/UPDATE: parent/guardian/admin only (or via RPC)
+
+⸻
+
+4) public.points_ledger
+
+Purpose: Auditable points accounting; becomes the points source of truth.
+
+Columns:
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL FK -> families.id
+	•	child_id uuid NULL FK -> children.id
+	•	date_key date NOT NULL
+	•	event_type text NOT NULL
+Allowed: ('chore_complete','chore_uncheck','bonus','purchase','manual_adjust')
+	•	ref_id uuid NULL (optional pointer to chore_catalog/reward_catalog)
+	•	points_delta int NOT NULL
+	•	meta jsonb NOT NULL default '{}'
+	•	created_at timestamptz NOT NULL default now()
+
+Indexes:
+	•	INDEX (family_id, date_key)
+	•	INDEX (child_id, date_key)
+	•	INDEX (family_id, created_at desc)
+
+RLS:
+	•	SELECT: is_family_member(family_id)
+	•	INSERT: parent/guardian/admin only (or RPC)
+
+⸻
+
+5) public.reward_redemptions
+
+Purpose: Purchases/redemptions tracking.
+
+Columns:
+	•	id uuid PK default gen_random_uuid()
+	•	family_id uuid NOT NULL FK -> families.id
+	•	child_id uuid NOT NULL FK -> children.id
+	•	reward_id uuid NOT NULL FK -> reward_catalog.id
+	•	cost int NOT NULL
+	•	status text NOT NULL default 'requested'
+Allowed: ('requested','approved','denied','fulfilled')
+	•	created_at timestamptz NOT NULL default now()
+	•	updated_at timestamptz NOT NULL default now()
+
+Indexes:
+	•	INDEX (family_id, created_at desc)
+	•	INDEX (child_id, created_at desc)
+
+RLS:
+	•	SELECT: is_family_member(family_id)
+	•	INSERT/UPDATE: parent/guardian/admin only (or RPC)
+
+⸻
+
+Required RPC Functions (Backend Primitives)
+
+RPC A: ensure_family_exists()
+
+Purpose: Deterministic family setup to eliminate the “Setting up…” slow loop.
+Behavior:
+	1.	Determine auth.uid()
+	2.	If user already has membership in family_members, return that family_id
+	3.	Else:
+	•	Insert into families (created_by, name)
+	•	Insert into family_members (family_id, user_id, role)
+	•	Insert into family_settings (family_id, primary_parent_email, defaults...)
+	4.	Return { family_id }
+
+This function must run SECURITY DEFINER and be idempotent.
+
+⸻
+
+RPC B: add_child(p_display_name text)
+
+Purpose: Insert a new child into children for the caller’s family.
+Behavior:
+	•	Resolve caller’s family_id via family_members
+	•	Insert children (family_id, display_name)
+	•	Return inserted child row
+
+⸻
+
+RPC C: toggle_chore(p_child_id uuid, p_chore_id uuid, p_date_key date)
+
+Purpose: Server-authoritative chore toggle.
+Behavior:
+	•	Verify caller is member of the child’s family
+	•	Upsert daily_status (child_id, date_key)
+	•	If p_chore_id present in array: remove it and write ledger event chore_uncheck with negative points
+	•	Else: add it and write ledger event chore_complete with positive points from chore_catalog.points
+	•	Recompute and store daily_status.points_earned for the day
+	•	Return updated daily_status and optionally current child points total
+
+⸻
+
+RPC D: redeem_reward(p_child_id uuid, p_reward_id uuid)
+
+Purpose: Rewards redemption with correct accounting.
+Behavior:
+	•	Verify membership and reward availability (active, approval rules)
+	•	Calculate current points (sum ledger) and enforce sufficient balance
+	•	Insert into reward_redemptions
+	•	Insert into points_ledger with event_type='purchase' and negative points_delta = reward.cost
+	•	Return redemption record
+
+⸻
+
+RPC E: grant_bonus(p_child_id uuid, p_points int, p_reason text)
+
+Purpose: Parent bonus points for good behavior.
+Behavior:
+	•	Verify membership
+	•	Insert points_ledger with event_type='bonus', points_delta positive, meta includes reason
+	•	Return new points total
+
+⸻
+
+Frontend Behavior Contract (Must Conform Exactly)
+
+On Login / App Boot
+	1.	Use Supabase Auth session
+	2.	Call RPC ensure_family_exists()
+	3.	Store family_id in app state
+	4.	Fetch required data:
+	•	children where family_id = ...
+	•	family_settings where family_id = ...
+	•	chore_catalog where family_id = ... and active = true
+	•	reward_catalog where family_id = ... and active = true
+
+If ensure_family_exists() fails, display the Supabase error payload to the user (do not spin indefinitely).
+
+⸻
+
+Parent Settings Page
+	•	Primary Parent Email:
+	•	Default value pulled from family_settings.primary_parent_email
+	•	Editable; saved by UPDATE on family_settings
+	•	UI must prevent saving if primary_parent_email == secondary_parent_email (case-insensitive trim compare)
+	•	Daily Summary Time/Timezone:
+	•	Stored in family_settings.daily_summary_time_local and family_settings.timezone
+	•	Toggle stored in family_settings.daily_summary_enabled
+
+⸻
+
+Manage Kids
+	•	List children: select id, display_name from children where family_id = ... order by created_at
+	•	Add child:
+	•	call RPC add_child(p_display_name)
+	•	then refetch children list
+	•	No inserts should ever send name column to children (only display_name)
+
+⸻
+
+Chores Page (per child)
+	•	Determine date_key based on family_settings.timezone
+	•	Load today’s status:
+	•	select * from daily_status where child_id = ... and date_key = ...
+	•	if none, treat as empty set
+	•	Render chores from chore_catalog
+	•	Toggle chore:
+	•	call RPC toggle_chore(child_id, chore_id, date_key)
+	•	update UI from returned daily_status
+
+No client should write directly to daily_status unless explicitly designed; prefer RPC.
+
+⸻
+
+Points / Badges
+	•	Points total derived from points_ledger:
+	•	either as a view or computed query (sum points_delta grouped by child)
+	•	Badges:
+	•	Either computed from points totals client-side, or stored later
+	•	Must not block core flows if badge persistence isn’t yet implemented
+
+⸻
+
+Rewards Store
+	•	Render reward_catalog active items
+	•	Redeem:
+	•	call RPC redeem_reward(child_id, reward_id)
+	•	update points from ledger / returned total
+	•	Purchases list:
+	•	read from reward_redemptions filtered by family/child
+
+⸻
+
+Supabase SQL Requirement
+
+SQL migrations must be run in Supabase to add the new tables, policies, and RPCs. No other “connect databases” work is required.
+
+⸻
+
+Operational Notes for Known Issues
+
+Fix for Current Error: public.daily_status missing
+
+The error indicates the frontend is calling daily_status but the table does not exist. The database must include daily_status and the frontend must write to it only through the intended interface (RPC).
+
+Slow “Setting up…” Loop
+
+Eliminate polling/guessing by making ensure_family_exists() deterministic and always called on login to obtain a valid family_id.
+
+⸻
+
+Deliverables for Implementation
+	1.	Supabase migration SQL containing:
+	•	chore_catalog, reward_catalog, daily_status, points_ledger, reward_redemptions
+	•	indexes
+	•	RLS policies
+	•	RPC functions A–E
+	2.	Frontend refactor to:
+	•	conform to audited schema (children.display_name, families.created_by, etc.)
+	•	call ensure_family_exists() and treat returned family_id as the anchor
+	•	replace any children.name usage with children.display_name
+	•	replace any local-only completion state with daily_status + points_ledger writes via RPC
+
+⸻

@@ -1,0 +1,106 @@
+Move forward with that approach with one correction: do not make ensure_family_exists() seed the catalog. Keep seeding as a separate, explicit action (or a one-time migration) so family creation stays fast and deterministic.
+
+Everything else in your plan passes the sanity check.
+
+⸻
+
+What your developer should implement (definitive scope)
+
+1) Database becomes source of truth for:
+	•	chore_catalog
+	•	reward_catalog
+	•	daily_status (per-child, per-day completion)
+	•	points_ledger (auditable points)
+	•	reward_redemptions (purchases)
+
+2) Frontend replaces:
+	•	frontend-only catalog constants → Supabase reads (chore_catalog, reward_catalog)
+	•	local “checked chores” state → RPC toggle_chore() + daily_status
+	•	any “child_points” logic → computed from points_ledger (or view)
+
+3) Keep these tables as-is:
+	•	families
+	•	family_members
+	•	children
+	•	family_settings
+
+⸻
+
+SQL you need to run in Supabase
+
+Yes — you must run a migration in Supabase to create the missing tables/RPCs/policies.
+You do not need any special “connect databases” query. Replit connects via your existing SUPABASE_URL + SUPABASE_ANON_KEY. Creating tables/functions is the only requirement.
+
+⸻
+
+Key correction to the plan (important)
+
+✅ Good
+	•	New tables + RPCs
+	•	Frontend refactor to use DB-backed queries
+	•	Points derived from ledger
+	•	RPCs used for writes to avoid RLS pain
+
+❌ Change this
+	•	Don’t seed catalog data inside ensure_family_exists()
+	•	That function should only guarantee family_id + membership + family_settings
+	•	Seeding chores/rewards should be separate (migration seed or explicit “seed defaults” RPC)
+
+Reason: ensure_family_exists() runs on login and should never be slow or fragile.
+
+⸻
+
+Minimal migration strategy (what “one-time SQL” should include)
+
+A) Create tables (if not exist)
+	•	chore_catalog
+	•	reward_catalog
+	•	daily_status
+	•	points_ledger
+	•	reward_redemptions
+
+B) Create triggers for updated_at (where needed)
+
+C) Add RLS policies
+	•	Read for all family members
+	•	Writes restricted to parents/guardians/admins or forced through RPC security definer
+
+D) Create RPCs
+	•	ensure_family_exists() (family + membership + settings only)
+	•	add_child(display_name)
+	•	toggle_chore(child_id, chore_id, date_key)
+	•	redeem_reward(child_id, reward_id)
+	•	grant_bonus(child_id, points, reason)
+	•	optional: seed_default_catalog(family_id) (separate from ensure)
+
+⸻
+
+Frontend contract your dev should follow (no ambiguity)
+
+On login / app boot
+	1.	rpc('ensure_family_exists') → returns family_id
+	2.	Fetch:
+	•	children by family_id
+	•	family_settings by family_id
+	•	chore_catalog active by family_id
+	•	reward_catalog active by family_id
+
+Add child
+	•	Call rpc('add_child', { display_name })
+	•	Refresh children list
+	•	Never reference children.name (only display_name)
+
+Toggle chore
+	•	Call rpc('toggle_chore', { child_id, chore_id, date_key })
+	•	UI updates from returned daily_status
+
+Points display
+	•	Derived from points_ledger sum per child (or a view)
+
+Redeem reward
+	•	Call rpc('redeem_reward', { child_id, reward_id })
+	•	UI updates from returned values
+
+⸻
+
+That’s the correct plan to “move everything to Supabase” and stop the recurring schema-cache / missing-table regressions.
