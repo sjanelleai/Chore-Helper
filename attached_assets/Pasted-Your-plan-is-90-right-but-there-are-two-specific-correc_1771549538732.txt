@@ -1,0 +1,77 @@
+Your plan is 90% right, but there are two specific corrections you need to make so you don’t accidentally bake in the wrong architecture again.
+
+✅ What’s right (keep)
+	•	Frontend refactor to match the audited schema is the correct primary move.
+	•	Don’t touch DB unless blocked is correct.
+	•	ensure_family_exists RPC (or equivalent) is the right “backend primitive” to create families + family_members + family_settings for new users.
+	•	Updating all references:
+	•	child.name → child.display_name
+	•	membership via family_members
+	•	settings via family_settings
+
+❌ The two fixes you must make
+
+1) Stop using family_config for chores/rewards “catalog” (for now)
+
+You can store catalog JSON in family_config, but it’s not part of the audited contract you’re trying to conform to, and it’s a trap during refactor because it adds another moving part.
+
+Better for this refactor:
+	•	Keep catalog in frontend constants for the moment (or wherever it already lives)
+	•	Only re-introduce catalog persistence after core auth/family/child flows are stable
+
+If you insist on catalog persistence, treat it as Phase 2, not part of “make the app work.”
+
+2) Do not remove PIN/avatars just because “columns aren’t in the audit”
+
+The audit you pasted is a snapshot of key tables, not proof that those columns never existed or aren’t needed.
+
+Correct approach:
+	•	Remove PIN/avatars only if:
+	•	the actual children table truly lacks those columns (confirmed in Supabase table editor), and
+	•	you’ve decided the feature is out of scope for this build
+
+Otherwise you risk deleting UX that you actually want.
+
+⸻
+
+The corrected refined plan (what you should hand to your dev)
+
+A) Frontend changes (required)
+	1.	auth-context.tsx
+	•	Resolve family_id via family_members where user_id = auth.uid()
+	•	If no rows: call ensure_family_exists() RPC to create:
+	•	families(created_by)
+	•	family_members(user_id, family_id, role)
+	•	family_settings(family_id, defaults)
+	•	Store currentFamilyId in state
+	2.	Data layer (use-data.ts)
+	•	Replace all settings reads/writes with family_settings
+	•	primary_parent_email
+	•	secondary_parent_email
+	•	daily_summary_enabled
+	•	daily_summary_time_local
+	•	timezone
+	•	Replace all child queries with children.display_name
+	3.	Pages/components
+	•	Replace everywhere: child.name → child.display_name
+	•	Add-child inserts only: (family_id, display_name) (plus any additional columns that truly exist)
+
+B) Minimal SQL (only what’s needed)
+	•	Create/replace ensure_family_exists() RPC consistent with the current schema.
+	•	Do not add tables. Do not rename tables.
+	•	Only add policies if the client is blocked (e.g., no INSERT on families and you are not using RPC).
+
+C) Testing sequence (required)
+	1.	New user signup → app resolves family_id without hanging
+	2.	Parent Settings loads → can update and persists
+	3.	Add Child works → child appears in list immediately
+	4.	Reload app → membership + children still load
+
+⸻
+
+One more direct sanity note (important)
+
+Your plan assumes the client will depend on ensure_family_exists. That’s good.
+But then make sure your UI does not “spin forever” if the RPC fails — it must show the actual Supabase error payload.
+
+That’s it.

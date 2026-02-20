@@ -1,0 +1,110 @@
+Summary for your developer
+Below is an audited snapshot of your key tables, columns, constraints, RLS, and helpful reference notes. I’ve also included “links” guidance for how to access each table via Supabase tools.
+
+Public tables discovered
+families (RLS: enabled)
+children (RLS: enabled)
+family_settings (RLS: enabled)
+family_members (RLS: enabled)
+email_send_log (RLS: disabled)
+family_config (RLS: disabled)
+Table structures
+families
+Columns
+id uuid primary key default gen_random_uuid()
+created_by uuid not null (FK → auth.users.id)
+name text null
+created_at timestamptz not null default now()
+updated_at timestamptz not null default now()
+Primary key: id
+Foreign keys
+families_created_by_fkey: created_by → auth.users.id
+children_family_id_fkey: public.children.family_id → public.families.id
+family_members_family_id_fkey: public.family_members.family_id → public.families.id
+family_settings_family_id_fkey: public.family_settings.family_id → public.families.id
+RLS: enabled
+Policy: families_select_member (SELECT): USING is_family_member(id)
+children
+Columns
+id uuid primary key default gen_random_uuid()
+family_id uuid not null (FK → public.families.id)
+display_name text not null
+created_at timestamptz not null default now()
+Primary key: id
+Foreign keys
+children_family_id_fkey: family_id → public.families.id
+RLS: enabled
+Policies:
+children_select_member (SELECT): USING is_family_member(family_id)
+children_insert_member (INSERT): WITH CHECK is_family_member(family_id)
+family_settings
+Columns
+family_id uuid primary key (FK → public.families.id)
+primary_parent_email text null
+secondary_parent_email text null
+daily_summary_enabled boolean not null default false
+daily_summary_time_local text null default '19:30'
+timezone text null default 'America/Denver'
+created_at timestamptz not null default now()
+updated_at timestamptz not null default now()
+Primary key: family_id
+Foreign keys
+family_settings_family_id_fkey: family_id → public.families.id
+RLS: enabled
+Policies:
+family_settings_select_member (SELECT): USING is_family_member(family_id)
+family_settings_update_member (UPDATE): USING is_family_member(family_id) WITH CHECK is_family_member(family_id)
+family_members
+Columns
+id uuid primary key default gen_random_uuid()
+family_id uuid not null (FK → public.families.id)
+user_id uuid not null (FK → auth.users.id)
+role text not null default 'parent' check role in ('parent','guardian','admin')
+created_at timestamptz not null default now()
+RLS: enabled
+Policies:
+family_members_select_member (SELECT): USING (user_id = auth.uid()) OR is_family_member(family_id)
+email_send_log
+Composite primary key: (date_key, family_key)
+Columns
+family_id uuid null
+date_key date not null
+status text not null check status in ('sent','failed')
+error text null
+created_at timestamptz not null default now()
+family_key text not null
+RLS: disabled
+family_config
+Columns
+id uuid primary key default gen_random_uuid()
+key text unique
+value jsonb
+created_at timestamptz default now()
+updated_at timestamptz default now()
+secondary_parent_email text null
+RLS: disabled
+Notes on helper functions and assumptions
+Your RLS policies reference is_family_member(...). Ensure this function exists in the database and safely resolves membership from family_members. If you want, I can retrieve its definition and validate permissions.
+Recommended indexes
+children(family_id) for joins and RLS filters
+family_members(user_id, family_id) to support membership checks quickly
+families(created_by) if you frequently filter families by creator
+If you want, I can create these indexes.
+
+Where to find these in Supabase
+SQL Editor: use SELECT/DDL to view details
+Table Editor: open each table under public
+Auth users mapping: referenced via auth.users
+Direct dashboard navigation tips:
+
+Project tables: https://.supabase.co/project/default/database/tables
+SQL editor: https://.supabase.co/project/default/sql/new
+Auth users: https://.supabase.co/project/default/auth/users
+Replace with your project ref.
+
+Next actions I can take
+Retrieve and review the is_family_member function
+Generate DDL exports for these tables for handoff to your developer
+Create missing indexes and show a short migration script
+Extend RLS to INSERT/UPDATE/DELETE on families and children as needed
+Tell me which of the above you want, and I’ll execute and return the scripts.

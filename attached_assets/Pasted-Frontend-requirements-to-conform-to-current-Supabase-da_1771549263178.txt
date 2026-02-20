@@ -1,0 +1,202 @@
+Frontend requirements to conform to current Supabase database structure (handoff to developer)
+
+This is the frontend contract your app must follow to work with the current Supabase schema exactly as audited.
+
+⸻
+
+1) What the frontend can and cannot do (because of RLS)
+
+RLS-enabled tables (frontend access is restricted by membership)
+	•	public.families (RLS enabled)
+	•	public.family_members (RLS enabled)
+	•	public.family_settings (RLS enabled)
+	•	public.children (RLS enabled)
+
+RLS-disabled tables (frontend should generally NOT depend on these for core flow)
+	•	public.email_send_log (RLS disabled) — server/scheduler use
+	•	public.family_config (RLS disabled) — legacy/config only; do not use for identity/setup
+
+Critical implication
+
+The frontend cannot reliably “create” a family from scratch using direct inserts unless you add INSERT policies (currently only SELECT policy is listed for families). Therefore:
+
+Family creation + initial membership creation must be done server-side (RPC or backend route) OR you must add the missing INSERT policy on families.
+
+⸻
+
+2) Required runtime invariant for the frontend
+
+At all times after login, the app must be able to resolve:
+
+✅ currentFamilyId — the family id for the logged-in parent (auth user)
+
+Because all RLS policies are anchored on:
+	•	is_family_member(family_id)
+	•	and/or membership in family_members
+
+If the app does not have a valid family_id where the logged-in user is a member, all reads/writes will fail or stall.
+
+⸻
+
+3) Canonical data model (use these tables)
+
+Families
+	•	families.id is the family identifier.
+	•	families.created_by is the owner/creator (auth uid).
+
+Membership
+	•	family_members links auth.users.id → families.id.
+	•	role must be one of: parent, guardian, admin.
+
+Settings
+	•	family_settings is the relational settings table.
+	•	Use it for:
+	•	primary/secondary parent emails
+	•	daily summary enabled/time/timezone
+
+Children
+	•	children stores kid profiles.
+	•	Must include family_id on insert.
+
+⸻
+
+4) Required front-end flow (exact expected behavior)
+
+A) Login / App boot flow (Parent Zone or any family-scoped screen)
+
+Goal: resolve family_id deterministically, then load children/settings.
+
+Step A1 — Get auth session
+	•	Use Supabase client session to obtain:
+	•	user.id
+	•	user.email
+
+Step A2 — Resolve membership (read-only, should always be attempted first)
+
+Query:
+	•	SELECT family_id, role FROM public.family_members WHERE user_id = auth.uid() LIMIT 1
+
+Outcomes:
+	1.	Row exists → set currentFamilyId = family_id and continue
+	2.	No rows → user has no family membership yet → must run setup action (below)
+
+Step A3 — Setup action (must create family + membership + settings)
+
+Because families currently only lists a SELECT policy, do not assume the client can insert.
+
+Expected behavior:
+	•	Call a backend action (RPC or server route) that:
+	1.	Creates a row in families with created_by = auth.uid()
+	2.	Inserts into family_members linking the user to the family
+	3.	Inserts into family_settings for that family if missing
+	4.	Returns family_id
+
+Frontend requirement:
+	•	If setup succeeds → store returned family_id → continue
+	•	If setup fails → show the exact Supabase error message and stop the “Setting up…” loop (no silent retry)
+
+⸻
+
+B) Load Parent Zone data (after currentFamilyId is known)
+
+Step B1 — Load family_settings
+
+Query:
+	•	SELECT * FROM public.family_settings WHERE family_id = currentFamilyId
+
+Because RLS requires membership:
+	•	this will succeed only if family_members was created properly.
+
+Step B2 — Load children list
+
+Query:
+	•	SELECT * FROM public.children WHERE family_id = currentFamilyId ORDER BY created_at DESC
+
+⸻
+
+C) Parent Settings behavior (email + daily summary time)
+
+Step C1 — Auto-fill primary email on UI (client-only convenience)
+	•	If family_settings.primary_parent_email is null/empty:
+	•	default the UI field to auth.user.email
+
+Step C2 — Persist changes (update family_settings)
+
+Update:
+	•	UPDATE public.family_settings SET ... WHERE family_id = currentFamilyId
+
+RLS policy exists for UPDATE as long as is_family_member(family_id) is true.
+
+Required validation before update
+	•	Lowercase/trim emails
+	•	Ensure primary_parent_email != secondary_parent_email
+
+⸻
+
+D) Add Child behavior (this must be the only insert)
+
+Action:
+	•	INSERT INTO public.children (family_id, display_name) VALUES (currentFamilyId, inputName)
+
+RLS policy exists:
+	•	children_insert_member requires WITH CHECK is_family_member(family_id)
+
+After insert
+	•	Re-fetch children list (SELECT ... WHERE family_id = currentFamilyId) or update state
+
+If add child fails
+
+The UI must surface the real error (e.g., RLS / missing family_id / invalid check constraint).
+
+⸻
+
+5) What must not be used by frontend for the core flow
+
+Do not use family_config for:
+	•	determining whether a family exists
+	•	storing parent emails
+	•	setup/membership
+	•	child creation
+
+Your canonical settings are in family_settings.
+
+Do not use email_send_log from the client
+
+It is for scheduled backend logic and idempotency.
+
+⸻
+
+6) “Setting up your family profile…” banner rules (so it doesn’t hang)
+
+Frontend should only show this while:
+	•	Step A2 is running, and
+	•	Step A3 (setup action) is running
+
+It must stop in one of two ways:
+	•	success: currentFamilyId resolved
+	•	failure: show actionable error and stop retry loop
+
+⸻
+
+7) Supabase function dependency
+
+Your RLS relies on:
+	•	is_family_member(uuid)
+
+Frontend does not call it directly, but all queries depend on it functioning.
+
+⸻
+
+8) QA checklist (what to verify on a fresh user)
+
+A brand new parent user should produce these rows:
+	1.	families: 1 row where created_by = auth.uid()
+	2.	family_members: 1 row linking user_id = auth.uid() to that family
+	3.	family_settings: 1 row with family_id = families.id
+	4.	Add Child: inserts into children with family_id = families.id
+
+If any one of (1)-(3) is missing, the UI will stall or fail inserts due to RLS.
+
+⸻
+
+This is the exact behavior your developer should implement in the frontend to conform to your current audited Supabase schema.
