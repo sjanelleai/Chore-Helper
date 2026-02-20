@@ -1,0 +1,329 @@
+HomeQuest / Chore Helper — Supabase-First Technical Handoff (Frontend + Backend + Email + Navigation)
+
+Goal
+
+Move all core app data (families, kids, chores, rewards, completion status, points, redemptions, email preferences, send logs) into Supabase as the source of truth, and use SendGrid to send emails on a schedule defined by the parent and stored in Supabase.
+
+⸻
+
+1) Source-of-truth database architecture (Supabase)
+
+1.1 Core identity + preferences (already in Supabase per your audit)
+
+families (RLS enabled)
+	•	id (uuid PK)
+	•	created_by (uuid FK → auth.users.id)
+	•	name, timestamps
+	•	Policies reference is_family_member(family_id) (or equivalent)
+
+family_members (RLS enabled)
+	•	id (uuid PK)
+	•	family_id (FK → families.id)
+	•	user_id (FK → auth.users.id)
+	•	role (parent/guardian/admin)
+	•	Used to determine membership + authorization
+
+children (RLS enabled)
+	•	id (uuid PK)
+	•	family_id (FK → families.id)
+	•	display_name (text)
+	•	timestamps
+
+family_settings (RLS enabled)
+	•	family_id (PK, FK → families.id)
+	•	primary_parent_email
+	•	secondary_parent_email
+	•	daily_summary_enabled
+	•	daily_summary_time_local (text like 19:30)
+	•	timezone (IANA string like America/Denver)
+	•	timestamps
+
+email_send_log (RLS currently disabled)
+	•	Tracks whether a daily summary was sent for a family/day (dedupe + audit)
+	•	Current composite PK noted in audit: (date_key, family_key) with family_id nullable
+Standardize to family_id long-term to avoid dual identifier confusion.
+
+family_config (RLS disabled, legacy key/value JSON)
+	•	Keep only if used for non-critical feature flags / legacy configuration.
+	•	Do not rely on this table for identity, membership, scheduling, or catalogs going forward.
+
+⸻
+
+2) What must be added to Supabase for “chores + rewards are missing”
+
+Right now chores/rewards aren’t showing because the app no longer has a reliable source for the catalog and/or the daily completion state.
+
+A clean Supabase-first model is:
+
+2.1 Catalog tables (per-family)
+
+chore_catalog
+	•	id (uuid PK)
+	•	family_id (FK → families.id)
+	•	title (text)  ← use title, not name
+	•	points (int)
+	•	category (text) (optional)
+	•	sort_order (int) (optional)
+	•	timestamps
+	•	RLS: members can select/insert/update/delete within their family
+
+reward_catalog
+	•	id (uuid PK)
+	•	family_id (FK → families.id)
+	•	title (text)
+	•	cost_points (int)
+	•	requires_parent_approval (boolean)
+	•	sort_order (int) (optional)
+	•	timestamps
+	•	RLS: members can select/insert/update/delete within their family
+
+2.2 Daily completion state (per child/per chore/per date)
+
+daily_status
+	•	child_id (FK → children.id)
+	•	chore_id (FK → chore_catalog.id)
+	•	date_key (date)
+	•	completed (boolean)
+	•	timestamps (optional)
+	•	PK or unique constraint on (child_id, chore_id, date_key)
+	•	RLS: family members can select/insert/update where child belongs to their family
+
+2.3 Points (ledger-based; avoids “child_points” drift)
+
+points_ledger
+	•	id (uuid PK)
+	•	family_id (FK → families.id)
+	•	child_id (FK → children.id)
+	•	delta (int) (+/-)
+	•	ref_type (text) e.g. chore_toggle, bonus, reward_redeem
+	•	ref_id (uuid nullable) (links to chore_id, redemption_id, etc)
+	•	note (text nullable)
+	•	created_at
+
+Points shown in UI = SUM(points_ledger.delta) per child.
+
+2.4 Rewards redemption tracking
+
+reward_redemptions
+	•	id (uuid PK)
+	•	family_id (FK → families.id)
+	•	child_id (FK → children.id)
+	•	reward_id (FK → reward_catalog.id)
+	•	status (text) e.g. requested, approved, denied, fulfilled
+	•	created_at
+	•	(No updated_at is fine)
+
+⸻
+
+3) Required backend primitives (Supabase RPCs)
+
+These prevent fragile multi-step client writes and avoid RLS edge-cases.
+
+3.1 Ensure family exists (login bootstrap)
+
+ensure_family_exists()
+
+Purpose: if a user signs in but has no family membership, create:
+	•	families row (created_by = auth.uid())
+	•	family_members row
+	•	family_settings row (auto-fill primary email from auth.users.email)
+
+Frontend expected behavior
+	•	On app boot / Parent Zone load:
+	•	Query membership: family_members where user_id = auth.uid()
+	•	If missing → call rpc('ensure_family_exists')
+	•	Then load children, family_settings, catalog tables
+
+3.2 Catalog seeding (separate from ensure_family_exists)
+
+seed_default_catalog(family_id)
+
+Purpose: Insert default chores and rewards if the family has none (idempotent).
+
+Frontend expected behavior
+	•	After boot:
+	•	If chore_catalog is empty for family → call seed RPC once
+	•	If reward_catalog is empty for family → call seed RPC once
+
+3.3 Child creation
+
+add_child(p_display_name text) returns children
+
+Purpose: inserts child using display_name and returns inserted row.
+
+3.4 Toggle chore completion
+
+toggle_chore(p_child_id uuid, p_chore_id uuid, p_date_key date) returns json
+
+Purpose
+	•	Upsert daily_status row for that (child,chore,date)
+	•	Flip completed
+	•	Write points delta into points_ledger (+points when completed, -points when uncompleted)
+	•	Return { ok: true, completed: boolean }
+
+3.5 Redeem reward
+
+redeem_reward(p_child_id uuid, p_reward_id uuid) returns json
+
+Purpose
+	•	Create reward_redemptions row
+	•	Insert negative points into points_ledger (cost)
+	•	Return { ok: true, redemption_id: uuid }
+
+3.6 Bonus points
+
+grant_bonus(p_child_id uuid, p_delta int, p_note text) returns json
+
+Purpose
+	•	Insert into points_ledger with ref_type='bonus'
+	•	Return { ok: true }
+
+⸻
+
+4) Email system (Option 2: Supabase schedules + SendGrid sends)
+
+4.1 Where schedule settings live
+	•	Stored in family_settings:
+	•	daily_summary_enabled
+	•	daily_summary_time_local (HH:MM)
+	•	timezone (IANA)
+	•	recipient emails
+
+Frontend writes these fields directly to family_settings.
+
+4.2 Supabase Edge Functions
+
+A) nightly-summary-runner (scheduled)
+
+Runs every 15 minutes
+	•	Read families where daily_summary_enabled = true
+	•	Compute “due now” using family timezone + daily_summary_time_local
+	•	Deduplicate using email_send_log for (family_id, date_key)
+	•	If due and not already sent → call send-family-summary
+
+B) send-family-summary
+	•	Queries Supabase (server-side with service role) to assemble that day’s summary:
+	•	children in family
+	•	daily_status rows for date_key
+	•	points_ledger entries for date boundaries (timezone-respected)
+	•	reward_redemptions for date boundaries
+	•	Sends via SendGrid Dynamic Template
+	•	Logs success/failure to email_send_log
+
+4.3 Supabase secrets required
+
+Set in Supabase project secrets:
+	•	SENDGRID_API_KEY
+	•	SENDGRID_TEMPLATE_DAILY_SUMMARY
+	•	SENDGRID_FROM_EMAIL
+	•	SENDGRID_FROM_NAME
+
+4.4 What (if anything) needs to be run in Supabase to “connect databases”
+
+There is no “connect databases” query. The Supabase DB is already the DB. What must be run/deployed is:
+	•	SQL migrations (tables/RPCs/policies/indexes)
+	•	Edge Functions deployment
+	•	Scheduler/cron trigger creation
+	•	Secrets configuration
+
+⸻
+
+5) Frontend contract: expected queries + behaviors
+
+5.1 On app load / login
+	1.	Determine family:
+
+	•	select family_id from family_members where user_id = auth.uid()
+	•	If 0 rows → rpc('ensure_family_exists'), then re-query membership
+
+	2.	Load settings:
+
+	•	select * from family_settings where family_id = <family_id>
+
+	3.	Load children:
+
+	•	select * from children where family_id = <family_id> order by created_at
+
+	4.	Load catalogs:
+
+	•	select * from chore_catalog where family_id = <family_id> order by sort_order
+	•	select * from reward_catalog where family_id = <family_id> order by sort_order
+
+	5.	If either catalog is empty:
+
+	•	rpc('seed_default_catalog', { family_id }) then reload catalogs
+
+5.2 When selecting chores (kid view)
+	•	Determine date_key in local timezone
+	•	Load completion state for that child/day:
+	•	select chore_id, completed from daily_status where child_id=<id> and date_key=<date>
+	•	UI marks each chore complete/incomplete by matching chore_id
+
+5.3 When toggling a chore
+	•	Call rpc('toggle_chore', { child_id, chore_id, date_key })
+	•	On success, refresh:
+	•	child’s daily_status rows for that date
+	•	child’s points total (sum ledger) or cached total
+
+5.4 Points display
+	•	Query points total per child:
+	•	select sum(delta) from points_ledger where child_id=<id>
+	•	(or a view/RPC for performance)
+
+5.5 Rewards
+	•	Show rewards from reward_catalog
+	•	On redeem: rpc('redeem_reward', { child_id, reward_id })
+	•	Refresh points + redemptions list
+
+5.6 Parent Settings (daily summary)
+	•	Write to family_settings:
+	•	emails
+	•	enabled
+	•	time
+	•	timezone
+
+5.7 Test daily summary button (recommended change)
+	•	Instead of hitting Replit /api/..., call the Supabase Edge Function:
+	•	POST /functions/v1/send-family-summary with { family_id }
+	•	That ensures the same code path as nightly sending.
+
+⸻
+
+6) Navigation requirement (persistent menu everywhere)
+
+6.1 UX requirement
+	•	Navigation is always visible
+	•	Mobile: bottom tab bar
+	•	Desktop: left side rail
+	•	Content area adapts without losing state when switching sections
+
+6.2 Implementation expectation
+	•	Create an App Shell layout component:
+	•	Renders Nav + Outlet (or children)
+	•	Use responsive breakpoint:
+	•	<md → BottomTabs
+	•	>=md → SideNav
+	•	All pages render inside the shell so the nav never disappears:
+	•	Child view (chores)
+	•	Rewards
+	•	Badges
+	•	Parent Zone
+	•	Settings
+
+⸻
+
+7) What you need to run in Supabase (summary)
+
+You will run/deploy only these categories:
+	1.	SQL migration that creates:
+	•	chore_catalog, reward_catalog, daily_status, points_ledger, reward_redemptions
+	•	RPCs: ensure_family_exists, seed_default_catalog, add_child, toggle_chore, redeem_reward, grant_bonus
+	•	RLS policies + indexes
+	2.	Deploy Edge Functions:
+	•	nightly-summary-runner
+	•	send-family-summary
+	3.	Create scheduled trigger:
+	•	*/15 * * * * → nightly-summary-runner
+	4.	Set Supabase secrets (SendGrid)
+
+No additional “database connection” query is needed beyond migrations/RPC/policies.
