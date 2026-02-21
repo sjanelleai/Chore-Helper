@@ -1,0 +1,195 @@
+Chore Helper Auth Routing + Email Flows Spec (Kiln-pattern, locked)
+
+Canonical domain (all auth links + redirects): https://chore-helper.oibrigado.com
+Auth method: Email + Password only
+Goal: Confirm signup, invite accept, and reset password links must never 404, must land on public routes, parse Supabase hash fragments, handle expired links gracefully, and route users into Onboarding or the App.
+
+⸻
+
+1) Supabase URL configuration (must match Chore Helper)
+
+In Supabase Dashboard → Authentication → URL Configuration:
+
+Site URL
+	•	https://chore-helper.oibrigado.com
+
+Redirect URLs allowlist
+
+Add:
+	•	https://chore-helper.oibrigado.com/*
+	•	https://chore-helper.oibrigado.com/auth/callback
+	•	https://chore-helper.oibrigado.com/reset-password
+	•	https://chore-helper.oibrigado.com/accept-invite
+
+Hard rule: do not include localhost in production settings.
+
+⸻
+
+2) Required public routes (must render while logged out)
+
+These routes must be in the unauthenticated/public router branch and must not redirect away before parsing hash/query params:
+	1.	/auth/callback
+	2.	/reset-password
+	3.	/accept-invite
+
+Optional:
+4. /login?reset=success toast handler
+
+⸻
+
+3) Page behaviors
+
+A) /reset-password
+
+Purpose: handle Supabase recovery links
+
+Must handle:
+	•	Valid recovery hash:
+	•	#access_token=...&refresh_token=...&type=recovery
+	•	Error hash:
+	•	#error=access_denied&error_code=otp_expired&error_description=...
+	•	Empty hash (# or none): still render resend UI (no 404)
+
+UI states:
+	1.	Loading (“Checking link…”)
+	2.	Expired/invalid link UI when error_code exists
+	3.	Password form UI when a session exists
+	4.	Success redirect to /login?reset=success
+
+Rules:
+	•	password min length 8
+	•	confirm password must match
+	•	on submit:
+	•	supabase.auth.updateUser({ password })
+	•	then supabase.auth.signOut()
+	•	redirect /login?reset=success
+
+Resend reset email (inline form):
+	•	supabase.auth.resetPasswordForEmail(email, { redirectTo: "https://chore-helper.oibrigado.com/reset-password" })
+
+⸻
+
+B) /accept-invite
+
+Purpose: accept Supabase invite links
+
+UI states:
+	1.	Loading
+	2.	Expired/invalid invite if hash includes error_code (esp otp_expired)
+	3.	Valid invite flow: session exists → route via onboarding gate
+
+Logic:
+	1.	Parse hash errors
+	•	If error: show “Invite expired—ask parent/admin to resend”
+	2.	Else:
+	•	supabase.auth.getSession()
+	•	If session exists:
+	•	run onboarding gate (Section 5) and route accordingly
+	•	If no session:
+	•	show “Invite link invalid/expired” + CTA to login
+
+⸻
+
+C) /auth/callback
+
+Purpose: catch-all landing for confirmation links (signup confirmation + any other auth redirect)
+
+Logic:
+	1.	Parse hash errors → show friendly error if present
+	2.	Else:
+	•	supabase.auth.getSession()
+	•	If session exists: onboarding gate → route
+	•	Else: show invalid/expired message + link to /login
+
+⸻
+
+4) Shared helper (required)
+
+Create a shared helper used by all three pages:
+
+parseHashParams()
+	•	new URLSearchParams(window.location.hash.replace(/^#/, ""))
+
+Read keys:
+	•	error, error_code, error_description
+	•	type, access_token, refresh_token
+
+Rule:
+	•	If error_code exists → show invalid/expired UI, do not crash.
+
+⸻
+
+5) Onboarding gate (Chore Helper specific)
+
+After session exists (in /auth/callback and /accept-invite), route based on whether the family is “ready”.
+
+Definition of “ready”
+
+Ready if:
+	•	user has a family membership (family_members row exists for auth.uid()), and
+	•	either:
+	•	at least one child exists for that family_id, or
+	•	onboarding flag is complete (if you have one)
+
+Implementation pattern
+	•	Call a single API/rpc/helper that returns:
+	•	{ family_id, has_children, onboarding_complete }
+	•	Routing:
+	•	if not ready → /onboarding
+	•	else → app home (your main route)
+
+⸻
+
+6) Login page toast (recommended)
+
+If /login?reset=success, show toast:
+	•	“Password updated. Please sign in.”
+
+⸻
+
+7) Replit deployment requirement (prevents prod-only 404s)
+
+Your server must serve the SPA shell for these paths:
+	•	/reset-password
+	•	/accept-invite
+	•	/auth/callback
+
+Implementation requirement:
+	•	Any unknown route should return index.html (SPA fallback), not a 404.
+
+⸻
+
+8) Supabase email template alignment (must match routes)
+
+Ensure Supabase email templates land on these routes:
+	•	Confirm signup → https://chore-helper.oibrigado.com/auth/callback
+	•	Invite user → https://chore-helper.oibrigado.com/accept-invite
+	•	Reset password → https://chore-helper.oibrigado.com/reset-password
+
+Also ensure any client-side redirectTo values match these.
+
+⸻
+
+9) Acceptance tests (run in production)
+
+On https://chore-helper.oibrigado.com:
+	1.	Direct route loads (logged out)
+
+	•	/reset-password loads (no 404)
+	•	/accept-invite loads
+	•	/auth/callback loads
+
+	2.	Error hash simulation
+
+	•	/reset-password#error=access_denied&error_code=otp_expired&error_description=test
+	•	shows expired UI (no crash)
+
+	3.	Reset flow
+
+	•	request reset → click link → set new password → redirected to /login?reset=success
+
+	4.	Invite flow
+
+	•	invite user → click link → routes to onboarding/app depending on readiness
+
+⸻

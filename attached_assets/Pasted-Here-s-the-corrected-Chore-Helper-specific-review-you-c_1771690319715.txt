@@ -1,0 +1,260 @@
+Here’s the corrected, Chore Helper–specific review you can hand to your developer. It keeps your desired workflow (Kiln-style), locks to chore-helper.oibrigado.com, and confirms the right move is switching from 6-digit PIN to real passwords because Supabase Auth is fundamentally password-based for email/password flows.
+
+⸻
+
+Chore Helper Auth Email Flows — Required Changes (Developer Brief)
+
+Objective
+
+Make sure Supabase Auth email flows never 404, always land on public routes, correctly parse Supabase hash fragments, handle errors like otp_expired, and route users into Onboarding or the app based on readiness.
+
+Canonical domain: https://chore-helper.oibrigado.com
+Auth mode: Email + Password (min 8 chars)
+Out of scope: Magic links/OTP login (not enabled)
+
+⸻
+
+A) Current state vs required state
+
+What exists now (per your review)
+	•	/auth/callback exists (partial handling)
+	•	/auth/reset exists (PIN-based; not compatible with Supabase recovery flow requirements)
+	•	No /reset-password
+	•	No /accept-invite
+	•	No shared hash parser
+	•	No onboarding gate
+	•	No ?reset=success toast
+	•	Login + signup still using 6-digit PIN model
+
+Required by spec (must implement)
+	1.	Public routes:
+
+	•	/auth/callback
+	•	/reset-password
+	•	/accept-invite
+
+	2.	Switch auth credential model:
+
+	•	Replace 6-digit PIN model with password (min 8 chars) for signup/login/reset
+
+	3.	Shared helper:
+
+	•	parseHashParams() used by callback/reset/invite pages
+
+	4.	Onboarding gate:
+
+	•	After successful session establishment, route to onboarding if family setup is incomplete
+
+⸻
+
+B) Why the PIN model must be replaced (for your developer)
+
+Supabase email/password auth flows assume:
+	•	signUp({ email, password })
+	•	signInWithPassword({ email, password })
+	•	updateUser({ password }) (for recovery/reset)
+
+A 6-digit PIN can be treated as a password, but it will:
+	•	violate min-length expectations and security defaults
+	•	create inconsistent UX (reset wants “password”)
+	•	complicate validation and user support
+
+So the correct implementation is: real password fields, min length 8.
+
+⸻
+
+C) Supabase configuration requirements (must match domain)
+
+In Supabase → Authentication → URL Configuration:
+
+Site URL
+	•	https://chore-helper.oibrigado.com
+
+Redirect URLs
+	•	https://chore-helper.oibrigado.com/*
+	•	https://chore-helper.oibrigado.com/auth/callback
+	•	https://chore-helper.oibrigado.com/reset-password
+	•	https://chore-helper.oibrigado.com/accept-invite
+
+⸻
+
+D) Routes and behavior requirements (implementation contract)
+
+1) Shared helper: parseHashParams()
+
+Create a helper used by all auth pages:
+	•	parse: window.location.hash (strip #)
+	•	return URLSearchParams
+	•	read:
+	•	error, error_code, error_description
+	•	type
+	•	access_token, refresh_token
+
+Rule: if error_code exists → show invalid/expired UI and stop.
+
+⸻
+
+2) /reset-password (new; replaces /auth/reset)
+
+Purpose
+
+Handle Supabase recovery links robustly.
+
+Must support
+	•	Hash tokens:
+	•	#access_token=...&refresh_token=...&type=recovery
+	•	Error hash:
+	•	#error=access_denied&error_code=otp_expired&error_description=...
+	•	Empty hash: show resend UI (never 404)
+
+UI states
+	1.	Loading (“Checking link…”)
+	2.	Expired/invalid link UI with resend reset email form
+	3.	Password form when session exists
+	4.	After update success:
+	•	sign out
+	•	redirect /login?reset=success
+
+Logic
+	•	if hash has error → show expired UI
+	•	else:
+	•	getSession()
+	•	if no session → show resend UI
+	•	if session → show form:
+	•	password min 8
+	•	confirm match
+	•	updateUser({ password })
+	•	signOut()
+	•	redirect /login?reset=success
+
+Resend reset email
+
+Call:
+	•	resetPasswordForEmail(email, { redirectTo: "https://chore-helper.oibrigado.com/reset-password" })
+
+⸻
+
+3) /accept-invite (new)
+
+Purpose
+
+Handle Supabase invite links and route to onboarding/app.
+
+UI states
+	1.	Loading
+	2.	Expired/invalid invite UI on error hash (otp_expired etc.)
+	3.	Valid invite flow if session exists
+
+Logic
+	•	parse hash errors
+	•	if error → show “Invite expired—ask parent/admin to resend”
+	•	else:
+	•	getSession()
+	•	if session exists → run onboarding gate routing
+	•	else → show “Invalid link” + CTA to login
+
+⸻
+
+4) /auth/callback (update)
+
+Purpose
+
+Catch-all confirmation landing (signup confirm + other redirects)
+
+Logic
+	•	parse hash errors → show friendly message
+	•	else:
+	•	getSession()
+	•	if session exists → onboarding gate routing
+	•	else → show invalid/expired message + link to /login
+
+⸻
+
+E) Onboarding gate (required for both callback + invite)
+
+Create a helper: routeAfterAuth()
+
+Definition: “ready”
+
+A user is ready if:
+	•	there is a family_members row for auth.uid()
+	•	AND at least one child exists for that family OR onboarding-complete flag exists
+
+Routing
+	•	Not ready → /onboarding (or your equivalent setup page)
+	•	Ready → app home (e.g. /select-child or /kids)
+
+Important: this routing is performed inside /auth/callback and /accept-invite.
+
+⸻
+
+F) Update Login + Signup flows (PIN → password)
+
+Login page
+	•	Replace PIN field with password input
+	•	Call: signInWithPassword({ email, password })
+	•	If query param reset=success, show toast “Password updated. Please sign in.”
+	•	“Forgot password” button:
+	•	triggers resetPasswordForEmail(email, { redirectTo: "https://chore-helper.oibrigado.com/reset-password" })
+
+Signup page
+	•	Replace PIN capture with:
+	•	password + confirm password (min 8)
+	•	Call: signUp({ email, password, options: { emailRedirectTo: "https://chore-helper.oibrigado.com/auth/callback" } })
+	•	On signup success, show “Check your email to confirm.”
+
+⸻
+
+G) Replit SPA routing requirement (prevents production-only 404)
+
+Your server must serve the SPA shell (index.html) for:
+	•	/reset-password
+	•	/accept-invite
+	•	/auth/callback
+
+If this isn’t set, links will work in dev but 404 in prod.
+
+⸻
+
+H) Acceptance tests (must pass on prod)
+
+On https://chore-helper.oibrigado.com:
+	1.	Direct load
+
+	•	/reset-password loads without 404
+	•	/accept-invite loads without 404
+	•	/auth/callback loads without 404
+
+	2.	Error hash simulation
+
+	•	/reset-password#error=access_denied&error_code=otp_expired&error_description=test
+	•	shows expired UI + resend form
+
+	3.	Reset flow
+
+	•	request reset email
+	•	click link
+	•	set password
+	•	redirect /login?reset=success
+
+	4.	Signup confirm
+
+	•	sign up
+	•	click confirm link
+	•	land on /auth/callback
+	•	routed via onboarding gate
+
+	5.	Invite accept
+
+	•	invite user
+	•	click invite link
+	•	land on /accept-invite
+	•	routed via onboarding gate
+
+⸻
+
+Implementation note
+
+Remove or deprecate /auth/reset after /reset-password is live, so templates and redirectTo do not point to two competing paths.
+
+⸻
