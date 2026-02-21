@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { supabase } from "@/lib/supabase";
+import {
+  parseHashParams,
+  hasHashError,
+  getHashErrorMessage,
+  checkOnboardingReady,
+  routeAfterAuth,
+} from "@/lib/auth-helpers";
 import { Loader2, CheckCircle, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,17 +23,15 @@ export default function AuthCallback() {
   useEffect(() => {
     const handleCallback = async () => {
       try {
+        const hash = parseHashParams();
         const url = new URL(window.location.href);
-        const hash = window.location.hash;
-        const hashParams = new URLSearchParams(hash.replace("#", "?"));
         const queryCode = url.searchParams.get("code");
-        const type = hashParams.get("type") || url.searchParams.get("type") || "";
-        const hashError = hashParams.get("error_description") || url.searchParams.get("error_description");
+        const type = hash.type || url.searchParams.get("type") || "";
         setCallbackType(type);
 
-        if (hashError) {
-          const msg = decodeURIComponent(hashError);
-          if (msg.toLowerCase().includes("expired")) {
+        if (hasHashError(hash)) {
+          const msg = getHashErrorMessage(hash);
+          if (hash.errorCode === "otp_expired" || msg.toLowerCase().includes("expired")) {
             setState("expired");
           } else {
             setErrorMsg(msg);
@@ -37,9 +42,9 @@ export default function AuthCallback() {
 
         if (type === "recovery") {
           if (queryCode) {
-            navigate("/auth/reset?code=" + queryCode);
+            navigate("/reset-password?code=" + queryCode);
           } else {
-            navigate("/auth/reset" + window.location.hash);
+            navigate("/reset-password" + window.location.hash);
           }
           return;
         }
@@ -55,17 +60,10 @@ export default function AuthCallback() {
             }
             return;
           }
-          setState("success");
-          setTimeout(() => navigate("/select-child"), 1500);
-          return;
-        }
-
-        const accessToken = hashParams.get("access_token");
-        const refreshToken = hashParams.get("refresh_token");
-        if (accessToken && refreshToken) {
+        } else if (hash.accessToken && hash.refreshToken) {
           const { error } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken,
+            access_token: hash.accessToken,
+            refresh_token: hash.refreshToken,
           });
           if (error) {
             if (error.message?.toLowerCase().includes("expired")) {
@@ -76,18 +74,16 @@ export default function AuthCallback() {
             }
             return;
           }
-          setState("success");
-          setTimeout(() => navigate("/select-child"), 1500);
-          return;
         }
 
         const { data } = await supabase.auth.getSession();
         if (data.session) {
           setState("success");
-          setTimeout(() => navigate("/select-child"), 1500);
+          const status = await checkOnboardingReady();
+          const destination = routeAfterAuth(status);
+          setTimeout(() => navigate(destination), 1500);
         } else {
-          setState("success");
-          setTimeout(() => navigate("/login"), 1500);
+          setState("expired");
         }
       } catch (err: any) {
         setErrorMsg(err.message || "Something went wrong");

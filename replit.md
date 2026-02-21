@@ -1,13 +1,13 @@
 # Chore Helper (HomeQuest)
 
 ## Overview
-A multi-family gamified chore-tracking app for kids with parent control panels. Parents sign up with email + 6-digit PIN, create child profiles, and configure which catalog chores/rewards are enabled with custom point/cost values. Kids complete chores to earn points and redeem rewards, all scoped to their family.
+A multi-family gamified chore-tracking app for kids with parent control panels. Parents sign up with email + password (min 8 chars), create child profiles, and configure which catalog chores/rewards are enabled with custom point/cost values. Kids complete chores to earn points and redeem rewards, all scoped to their family.
 
 ## Architecture
 - **Frontend**: React + Vite + TanStack Query + Wouter (routing) + Tailwind CSS + shadcn/ui + Framer Motion
 - **Backend**: Express.js (TypeScript) - serves frontend + email endpoint only
 - **Database**: Supabase (PostgreSQL) with RLS policies for multi-family isolation
-- **Auth**: Supabase Auth (email + 6-digit PIN as password)
+- **Auth**: Supabase Auth (email + password, min 8 chars)
 - **Data Access**: Supabase JS client directly from frontend (RLS-protected)
 - **Email**: SendGrid integration for daily parent summaries (server-side only)
 - **Port**: 5000 (frontend + backend served together via Vite middleware)
@@ -20,12 +20,25 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - **Migration v5**: `supabase-migration-v5.sql` — **CRITICAL alignment fix**: creates daily_status_v2 (per-chore-row model), adds title column to catalog tables, rewrites toggle_chore RPC with points_ledger writes. Run AFTER v4.
 
 ## Auth Flow
-1. Parent signs up with email + 6-digit PIN → Supabase Auth creates user
+1. Parent signs up with email + password (min 8 chars) → Supabase Auth creates user
 2. Database trigger `handle_new_user()` auto-creates: family + family_members + family_settings (with primary_parent_email auto-filled from signup email)
 3. If trigger doesn't fire, frontend fallback calls `ensure_family_exists()` RPC which creates everything atomically
-4. Parent adds children via `add_child` RPC (from SelectChild page or Parent Panel)
-5. Child selection stored in localStorage + React context
-6. All data queries scoped by family_id via RLS using `current_family_id()` helper
+4. `ensureCatalogSeeded()` runs immediately after familyId is resolved (auto-populates chore/reward catalogs)
+5. Parent adds children via `add_child` RPC (from SelectChild page or Parent Panel)
+6. Child selection stored in localStorage + React context
+7. All data queries scoped by family_id via RLS using `current_family_id()` helper
+
+## Auth Email Routes (public, no auth required)
+- `/auth/callback` — Catch-all for signup confirmation links. Parses hash fragments, establishes session, routes via onboarding gate
+- `/reset-password` — Handles Supabase recovery links. Parses hash errors (otp_expired), shows password form or resend UI
+- `/accept-invite` — Handles Supabase invite links. Parses hash errors, routes via onboarding gate
+- Shared `parseHashParams()` helper in `client/src/lib/auth-helpers.ts` used by all three pages
+- Onboarding gate (`checkOnboardingReady` + `routeAfterAuth`) checks family membership + children existence
+
+## Supabase URL Configuration
+- Site URL: `https://chore-helper.oibrigado.com`
+- Redirect URLs: `/auth/callback`, `/reset-password`, `/accept-invite`
+- Email templates must point to the canonical domain routes above
 
 ## Database Schema (Supabase tables)
 
@@ -76,8 +89,11 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `remove_child(p_child_id)` - Deletes a child and all associated data (daily_status_v2, daily_status, points_ledger, reward_redemptions, child_badges). Only callable by family members.
 
 ## Key Pages
-- `/login` - Parent sign in (email + 6-digit PIN)
-- `/signup` - Parent account creation (email + 6-digit PIN + name)
+- `/login` - Parent sign in (email + password). Shows `?reset=success` toast after password reset
+- `/signup` - Parent account creation (email + password + name)
+- `/auth/callback` - Signup confirmation + generic auth redirect landing
+- `/reset-password` - Password reset (replaces old /auth/reset). Handles recovery hash, expired links, resend form
+- `/accept-invite` - Invite acceptance. Handles invite hash, expired invites, onboarding gate routing
 - `/select-child` - Child profile picker (with optional PIN verification)
 - `/` - Home dashboard (points display, quick actions, progress bar, parent zone)
 - `/chores` - Chore checklist with category filters
@@ -100,6 +116,7 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `supabase-migration-v4.sql` - email_send_log table, remove_child RPC, recommended indexes
 - `supabase-migration-v5.sql` - CRITICAL: daily_status_v2 (per-chore-row), catalog title columns, rewritten toggle_chore RPC
 - `client/src/lib/supabase.ts` - Supabase client configuration
+- `client/src/lib/auth-helpers.ts` - Shared auth helpers: parseHashParams(), checkOnboardingReady(), routeAfterAuth()
 - `client/src/lib/catalogSeed.ts` - Centralized catalog seeding (ensureCatalogSeeded) called during auth bootstrap
 - `client/src/lib/auth-context.tsx` - Auth provider with session management + ensure_family_exists fallback + catalog seeding
 - `client/src/hooks/use-data.ts` - All data hooks (Supabase queries/mutations via RPCs)

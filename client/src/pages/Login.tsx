@@ -1,21 +1,24 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, Shield, Eye, EyeOff, Mail, ArrowLeft, CheckCircle } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 const SITE_URL = import.meta.env.VITE_SITE_URL || (typeof window !== "undefined" ? window.location.origin : "");
 
 export default function Login() {
   const { signIn } = useAuth();
   const [, navigate] = useLocation();
+  const search = useSearch();
+  const { toast } = useToast();
   const [email, setEmail] = useState("");
-  const [pin, setPin] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [showPin, setShowPin] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [showForgot, setShowForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
@@ -25,18 +28,28 @@ export default function Login() {
   const [resending, setResending] = useState(false);
   const [resendSent, setResendSent] = useState(false);
 
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    if (params.get("reset") === "success") {
+      toast({
+        title: "Password updated",
+        description: "Please sign in with your new password.",
+      });
+    }
+  }, [search, toast]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setUnverifiedEmail(null);
 
-    if (pin.length < 6) {
-      setError("PIN must be 6 digits");
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters");
       return;
     }
 
     setLoading(true);
-    const result = await signIn(email, pin);
+    const result = await signIn(email, password);
     setLoading(false);
 
     if (result.error) {
@@ -75,7 +88,7 @@ export default function Login() {
 
     setForgotLoading(true);
     const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
-      redirectTo: `${SITE_URL}/auth/reset`,
+      redirectTo: `${SITE_URL}/reset-password`,
     });
     setForgotLoading(false);
 
@@ -146,7 +159,7 @@ export default function Login() {
               Check Your Email
             </h1>
             <p className="text-muted-foreground mb-6">
-              We sent a PIN reset link to <span className="font-bold text-foreground">{forgotEmail}</span>. Click the link in the email to set a new PIN.
+              We sent a password reset link to <span className="font-bold text-foreground">{forgotEmail}</span>. Click the link in the email to set a new password.
             </p>
             <Button
               variant="outline"
@@ -170,9 +183,9 @@ export default function Login() {
               <Shield className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-3xl font-display font-bold text-foreground" data-testid="text-forgot-title">
-              Reset PIN
+              Reset Password
             </h1>
-            <p className="text-muted-foreground mt-1">We'll email you a link to set a new PIN</p>
+            <p className="text-muted-foreground mt-1">We'll email you a link to set a new password</p>
           </div>
 
           <Card className="p-6">
@@ -247,38 +260,34 @@ export default function Login() {
 
             <div>
               <div className="flex items-center justify-between mb-1 gap-2 flex-wrap">
-                <label className="text-sm font-bold text-muted-foreground">6-Digit PIN</label>
+                <label className="text-sm font-bold text-muted-foreground">Password</label>
                 <button
                   type="button"
                   onClick={() => { setShowForgot(true); setForgotEmail(email); }}
                   className="text-xs text-primary font-bold hover:underline"
-                  data-testid="link-forgot-pin"
+                  data-testid="link-forgot-password"
                 >
-                  Forgot PIN?
+                  Forgot Password?
                 </button>
               </div>
               <div className="relative">
                 <input
-                  type={showPin ? "text" : "password"}
-                  value={pin}
-                  onChange={(e) => {
-                    const v = e.target.value.replace(/\D/g, "").slice(0, 6);
-                    setPin(v);
-                  }}
-                  inputMode="numeric"
-                  maxLength={6}
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  minLength={8}
                   required
-                  placeholder="Enter your 6-digit PIN"
-                  className="w-full p-3 rounded-xl border bg-background text-foreground font-mono text-lg tracking-widest pr-12"
-                  data-testid="input-pin"
+                  placeholder="Enter your password"
+                  className="w-full p-3 rounded-xl border bg-background text-foreground pr-12"
+                  data-testid="input-password"
                 />
                 <button
                   type="button"
-                  onClick={() => setShowPin(!showPin)}
+                  onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                  data-testid="button-toggle-pin-visibility"
+                  data-testid="button-toggle-password-visibility"
                 >
-                  {showPin ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
               </div>
             </div>

@@ -12,12 +12,12 @@ export default function Signup() {
   const { signUp } = useAuth();
   const [, navigate] = useLocation();
   const [email, setEmail] = useState("");
-  const [pin, setPin] = useState("");
-  const [confirmPin, setConfirmPin] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [showPin, setShowPin] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [success, setSuccess] = useState(false);
   const [needsVerification, setNeedsVerification] = useState(false);
   const [resending, setResending] = useState(false);
@@ -32,18 +32,18 @@ export default function Signup() {
       return;
     }
 
-    if (pin.length !== 6) {
-      setError("PIN must be exactly 6 digits");
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters");
       return;
     }
 
-    if (pin !== confirmPin) {
-      setError("PINs don't match");
+    if (password !== confirmPassword) {
+      setError("Passwords don't match");
       return;
     }
 
     setLoading(true);
-    const result = await signUp(email, pin, name.trim());
+    const result = await signUp(email, password, name.trim());
     setLoading(false);
 
     if (result.error) {
@@ -159,47 +159,39 @@ export default function Signup() {
             </div>
 
             <div>
-              <label className="text-sm font-bold text-muted-foreground mb-1 block">Choose a 6-Digit PIN</label>
+              <label className="text-sm font-bold text-muted-foreground mb-1 block">Password</label>
               <div className="relative">
                 <input
-                  type={showPin ? "text" : "password"}
-                  value={pin}
-                  onChange={(e) => {
-                    const v = e.target.value.replace(/\D/g, "").slice(0, 6);
-                    setPin(v);
-                  }}
-                  inputMode="numeric"
-                  maxLength={6}
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  minLength={8}
                   required
-                  placeholder="6-digit PIN"
-                  className="w-full p-3 rounded-xl border bg-background text-foreground font-mono text-lg tracking-widest pr-12"
-                  data-testid="input-pin"
+                  placeholder="Minimum 8 characters"
+                  className="w-full p-3 rounded-xl border bg-background text-foreground pr-12"
+                  data-testid="input-password"
                 />
                 <button
                   type="button"
-                  onClick={() => setShowPin(!showPin)}
+                  onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
                 >
-                  {showPin ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
               </div>
             </div>
 
             <div>
-              <label className="text-sm font-bold text-muted-foreground mb-1 block">Confirm PIN</label>
+              <label className="text-sm font-bold text-muted-foreground mb-1 block">Confirm Password</label>
               <input
-                type={showPin ? "text" : "password"}
-                value={confirmPin}
-                onChange={(e) => {
-                  const v = e.target.value.replace(/\D/g, "").slice(0, 6);
-                  setConfirmPin(v);
-                }}
-                inputMode="numeric"
-                maxLength={6}
+                type={showPassword ? "text" : "password"}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                minLength={8}
                 required
-                placeholder="Repeat PIN"
-                className="w-full p-3 rounded-xl border bg-background text-foreground font-mono text-lg tracking-widest"
-                data-testid="input-confirm-pin"
+                placeholder="Repeat password"
+                className="w-full p-3 rounded-xl border bg-background text-foreground"
+                data-testid="input-confirm-password"
               />
             </div>
 
