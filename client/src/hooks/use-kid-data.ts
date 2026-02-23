@@ -106,15 +106,23 @@ export function useKidChores() {
 
       if (error) throw error;
       const result = typeof data === "string" ? JSON.parse(data) : data;
-      const completedIds = new Set<string>(result?.completed_chore_ids || []);
+      const statuses = result?.statuses || [];
+      const statusMap = new Map<string, string>();
+      for (const s of statuses) {
+        statusMap.set(s.chore_id, s.status || "approved");
+      }
 
-      return activeChores.map(c => ({
-        id: c.id,
-        title: c.title,
-        points: c.points,
-        completed: completedIds.has(c.id),
-        categoryName: c.category,
-      }));
+      return activeChores.map(c => {
+        const rowStatus = statusMap.get(c.id);
+        return {
+          id: c.id,
+          title: c.title,
+          points: c.points,
+          completed: rowStatus === "approved",
+          status: (rowStatus || "unchecked") as "approved" | "pending" | "unchecked",
+          categoryName: c.category,
+        };
+      });
     },
   });
 }
@@ -146,7 +154,7 @@ export function useKidToggleChore() {
       const chore = catalog?.find(c => c.id === choreId);
       return {
         ok: true,
-        completed: result.completed as boolean,
+        status: (result.status || "approved") as string,
         choreTitle: chore?.title || "Chore",
         chorePoints: chore?.points || 0,
       };
@@ -156,11 +164,17 @@ export function useKidToggleChore() {
       queryClient.invalidateQueries({ queryKey: ["kid_child_points"] });
       queryClient.invalidateQueries({ queryKey: ["kid_badges"] });
 
-      if (data.completed) {
+      if (data.status === "approved") {
         toast({
           title: "Great job!",
           description: `+${data.chorePoints} points earned!`,
           className: "bg-green-500 text-white border-none",
+        });
+      } else if (data.status === "pending") {
+        toast({
+          title: "Submitted!",
+          description: `Waiting for a parent to approve ${data.choreTitle}`,
+          className: "bg-yellow-500 text-white border-none",
         });
       }
     },

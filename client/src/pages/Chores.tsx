@@ -19,7 +19,8 @@ export default function Chores() {
     filter === 'all' ? true : chore.categoryName === filter
   );
 
-  filteredChores?.sort((a, b) => Number(a.completed) - Number(b.completed));
+  const statusOrder = { unchecked: 0, pending: 1, approved: 2 };
+  filteredChores?.sort((a, b) => (statusOrder[a.status] || 0) - (statusOrder[b.status] || 0));
 
   return (
     <div className="min-h-screen bg-background">

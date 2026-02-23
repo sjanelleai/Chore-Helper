@@ -88,6 +88,8 @@ export function useFamilySettings() {
         daily_summary_enabled: boolean;
         daily_summary_time_local: string | null;
         timezone: string | null;
+        approval_mode: string;
+        approval_threshold: number;
         created_at: string;
         updated_at: string;
       };
@@ -174,26 +176,28 @@ export function useChores() {
 
       const { data: dailyRows } = await supabase
         .from("daily_status_v2")
-        .select("chore_id, completed")
+        .select("chore_id, completed, status")
         .eq("child_id", activeChildId)
         .eq("date_key", today);
 
-      const completedSet = new Set<string>();
+      const statusMap = new Map<string, string>();
       if (dailyRows) {
         for (const row of dailyRows) {
-          if (row.completed) {
-            completedSet.add(row.chore_id);
-          }
+          statusMap.set(row.chore_id, row.status || "approved");
         }
       }
 
-      return activeChores.map(c => ({
-        id: c.id,
-        title: c.title,
-        points: c.points,
-        completed: completedSet.has(c.id),
-        categoryName: c.category,
-      }));
+      return activeChores.map(c => {
+        const rowStatus = statusMap.get(c.id);
+        return {
+          id: c.id,
+          title: c.title,
+          points: c.points,
+          completed: rowStatus === "approved",
+          status: (rowStatus || "unchecked") as "approved" | "pending" | "unchecked",
+          categoryName: c.category,
+        };
+      });
     },
   });
 }
@@ -222,7 +226,7 @@ export function useToggleChore() {
       const chore = catalog?.find(c => c.id === choreId);
       return {
         ok: data.ok as boolean,
-        completed: data.completed as boolean,
+        status: (data.status || "approved") as string,
         choreTitle: chore?.title || "Chore",
         chorePoints: chore?.points || 0,
       };
@@ -233,8 +237,9 @@ export function useToggleChore() {
       queryClient.invalidateQueries({ queryKey: ["badges"] });
       queryClient.invalidateQueries({ queryKey: ["ledger"] });
       queryClient.invalidateQueries({ queryKey: ["family_summary"] });
+      queryClient.invalidateQueries({ queryKey: ["pending_approvals"] });
 
-      if (data.completed) {
+      if (data.status === "approved") {
         toast({
           title: "Great job!",
           description: `+${data.chorePoints} points earned!`,
@@ -270,6 +275,105 @@ export function useResetChores() {
       queryClient.invalidateQueries({ queryKey: ["chores"] });
       queryClient.invalidateQueries({ queryKey: ["child_points"] });
       toast({ title: "Ready for a new day!", description: "All chores have been reset." });
+    },
+  });
+}
+
+export interface PendingApproval {
+  child_id: string;
+  child_name: string;
+  chore_id: string;
+  chore_title: string;
+  points: number;
+  date_key: string;
+  created_at: string;
+}
+
+export function usePendingApprovals() {
+  const { family } = useAuth();
+
+  return useQuery<PendingApproval[]>({
+    queryKey: ["pending_approvals", family?.familyId],
+    enabled: !!family?.familyId,
+    queryFn: async () => {
+      if (!family?.familyId) return [];
+
+      const today = localDateKey(new Date());
+      const { data, error } = await supabase.rpc("get_pending_approvals", {
+        p_family_id: family.familyId,
+        p_date_key: today,
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      return (data?.pending || []) as PendingApproval[];
+    },
+    refetchInterval: 15000,
+  });
+}
+
+export function useApproveChore() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async ({ childId, choreId, dateKey }: { childId: string; choreId: string; dateKey: string }) => {
+      const { data, error } = await supabase.rpc("parent_approve_chore", {
+        p_child_id: childId,
+        p_chore_id: choreId,
+        p_date_key: dateKey,
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["pending_approvals"] });
+      queryClient.invalidateQueries({ queryKey: ["chores"] });
+      queryClient.invalidateQueries({ queryKey: ["child_points"] });
+      queryClient.invalidateQueries({ queryKey: ["family_summary"] });
+      queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      toast({
+        title: "Approved!",
+        description: "Points have been awarded.",
+        className: "bg-green-500 text-white border-none",
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
+export function useRejectChore() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async ({ childId, choreId, dateKey }: { childId: string; choreId: string; dateKey: string }) => {
+      const { data, error } = await supabase.rpc("parent_reject_chore", {
+        p_child_id: childId,
+        p_chore_id: choreId,
+        p_date_key: dateKey,
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["pending_approvals"] });
+      queryClient.invalidateQueries({ queryKey: ["chores"] });
+      queryClient.invalidateQueries({ queryKey: ["child_points"] });
+      queryClient.invalidateQueries({ queryKey: ["family_summary"] });
+      toast({
+        title: "Rejected",
+        description: "Chore has been cleared.",
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
 }
@@ -466,7 +570,7 @@ export function useUpdateSettings() {
   const { family } = useAuth();
 
   return useMutation({
-    mutationFn: async (settings: { parentEmail?: string | null; secondaryParentEmail?: string | null; dailySummaryEnabled?: boolean; dailySummaryTimeLocal?: string; dailySummaryTimezone?: string }) => {
+    mutationFn: async (settings: { parentEmail?: string | null; secondaryParentEmail?: string | null; dailySummaryEnabled?: boolean; dailySummaryTimeLocal?: string; dailySummaryTimezone?: string; approvalMode?: string; approvalThreshold?: number }) => {
       if (!family) throw new Error("No family");
 
       const updateData: any = {};
@@ -475,6 +579,8 @@ export function useUpdateSettings() {
       if (settings.dailySummaryEnabled !== undefined) updateData.daily_summary_enabled = settings.dailySummaryEnabled;
       if (settings.dailySummaryTimeLocal !== undefined) updateData.daily_summary_time_local = settings.dailySummaryTimeLocal;
       if (settings.dailySummaryTimezone !== undefined) updateData.timezone = settings.dailySummaryTimezone;
+      if (settings.approvalMode !== undefined) updateData.approval_mode = settings.approvalMode;
+      if (settings.approvalThreshold !== undefined) updateData.approval_threshold = settings.approvalThreshold;
 
       const { error } = await supabase
         .from("family_settings")

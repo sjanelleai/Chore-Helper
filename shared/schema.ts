@@ -7,6 +7,7 @@ export interface EnabledChore {
   title: string;
   points: number;
   completed: boolean;
+  status: "approved" | "pending" | "unchecked";
   categoryName: string;
 }
 

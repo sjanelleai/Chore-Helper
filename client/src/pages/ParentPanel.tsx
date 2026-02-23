@@ -4,7 +4,10 @@ import {
   useUpdateChoreConfig, useUpdateRewardConfig,
   useAwardBonus, useDailySummary, useSendSummaryEmail,
   useChoreCatalog, useRewardCatalog,
+  useFamilySettings,
+  usePendingApprovals, useApproveChore, useRejectChore,
 } from "@/hooks/use-data";
+import type { PendingApproval } from "@/hooks/use-data";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
@@ -18,6 +21,7 @@ import {
   ChevronDown, ChevronUp, Loader2,
   CheckSquare, ShoppingBag, UserPlus, LogOut, Users,
   Clock, Globe, Zap, Trash2, Copy, Check, Key, Shield,
+  ShieldCheck, X, CheckCheck,
 } from "lucide-react";
 
 function BonusSection() {
@@ -1136,6 +1140,222 @@ function ParentPortalPinSection() {
   );
 }
 
+function VerificationSection() {
+  const { data: settings } = useFamilySettings();
+  const updateSettings = useUpdateSettings();
+  const [mode, setMode] = useState<string>("smart");
+  const [threshold, setThreshold] = useState(30);
+
+  useEffect(() => {
+    if (settings) {
+      setMode(settings.approval_mode || "smart");
+      setThreshold(settings.approval_threshold ?? 30);
+    }
+  }, [settings?.approval_mode, settings?.approval_threshold]);
+
+  const handleSave = () => {
+    updateSettings.mutate({
+      approvalMode: mode,
+      approvalThreshold: threshold,
+    });
+  };
+
+  const hasChanges = settings && (mode !== (settings.approval_mode || "smart") || threshold !== (settings.approval_threshold ?? 30));
+
+  return (
+    <Card className="p-5">
+      <h3 className="font-display font-bold text-lg mb-2 flex items-center gap-2">
+        <ShieldCheck className="w-5 h-5 text-muted-foreground" />
+        Chore Verification
+      </h3>
+      <p className="text-xs text-muted-foreground mb-4">
+        Control when kids need parent approval before earning points.
+      </p>
+
+      <div className="space-y-3 mb-4">
+        {([
+          { value: "never", label: "Never verify", desc: "Points awarded instantly when kid marks chore done" },
+          { value: "smart", label: "Smart verify", desc: "Only high-value chores need approval" },
+          { value: "always", label: "Always verify", desc: "All chores need parent approval" },
+        ] as const).map(opt => (
+          <button
+            key={opt.value}
+            onClick={() => setMode(opt.value)}
+            className={cn(
+              "w-full text-left p-3 rounded-xl border-2 transition-all",
+              mode === opt.value
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/30"
+            )}
+            data-testid={`button-approval-${opt.value}`}
+          >
+            <div className="flex items-center gap-2">
+              <div className={cn(
+                "w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0",
+                mode === opt.value ? "border-primary" : "border-muted-foreground/40"
+              )}>
+                {mode === opt.value && <div className="w-2 h-2 rounded-full bg-primary" />}
+              </div>
+              <div>
+                <p className="font-bold text-sm">{opt.label}</p>
+                <p className="text-xs text-muted-foreground">{opt.desc}</p>
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {mode === "smart" && (
+        <div className="p-3 rounded-xl border bg-muted/30 mb-4">
+          <label className="text-sm font-bold text-muted-foreground mb-1 block">
+            Approval threshold
+          </label>
+          <p className="text-xs text-muted-foreground mb-2">
+            Chores worth this many points or more require parent approval
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              max={999}
+              value={threshold}
+              onChange={(e) => setThreshold(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-24 p-2 rounded-lg border bg-background text-foreground text-center font-mono font-bold"
+              data-testid="input-approval-threshold"
+            />
+            <span className="text-sm text-muted-foreground font-medium">points</span>
+          </div>
+        </div>
+      )}
+
+      <Button
+        onClick={handleSave}
+        disabled={updateSettings.isPending || !hasChanges}
+        className="w-full"
+        data-testid="button-save-verification"
+      >
+        {updateSettings.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+        Save Verification Settings
+      </Button>
+    </Card>
+  );
+}
+
+function PendingApprovalsSection() {
+  const { data: pending, isLoading } = usePendingApprovals();
+  const approveMutation = useApproveChore();
+  const rejectMutation = useRejectChore();
+
+  const grouped = (pending || []).reduce((acc, item) => {
+    if (!acc[item.child_id]) {
+      acc[item.child_id] = { childName: item.child_name, items: [] };
+    }
+    acc[item.child_id].items.push(item);
+    return acc;
+  }, {} as Record<string, { childName: string; items: PendingApproval[] }>);
+
+  const handleApproveAll = (childItems: PendingApproval[]) => {
+    for (const item of childItems) {
+      approveMutation.mutate({ childId: item.child_id, choreId: item.chore_id, dateKey: item.date_key });
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <Card className="p-5">
+        <h3 className="font-display font-bold text-lg mb-2 flex items-center gap-2">
+          <Clock className="w-5 h-5 text-yellow-500" />
+          Pending Approvals
+        </h3>
+        <div className="h-16 bg-muted/20 animate-pulse rounded-xl" />
+      </Card>
+    );
+  }
+
+  if (!pending || pending.length === 0) {
+    return (
+      <Card className="p-5">
+        <h3 className="font-display font-bold text-lg mb-2 flex items-center gap-2">
+          <Clock className="w-5 h-5 text-muted-foreground" />
+          Pending Approvals
+        </h3>
+        <p className="text-sm text-muted-foreground" data-testid="text-no-pending">No chores waiting for approval today.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-5">
+      <h3 className="font-display font-bold text-lg mb-4 flex items-center gap-2">
+        <Clock className="w-5 h-5 text-yellow-500" />
+        Pending Approvals
+        <span className="ml-auto bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 text-xs font-bold px-2 py-0.5 rounded-full" data-testid="badge-pending-count">
+          {pending.length}
+        </span>
+      </h3>
+
+      <div className="space-y-4">
+        {Object.entries(grouped).map(([childId, { childName, items }]) => (
+          <div key={childId} className="space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="font-bold text-sm text-foreground" data-testid={`text-pending-child-${childId}`}>{childName}</p>
+              {items.length > 1 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleApproveAll(items)}
+                  disabled={approveMutation.isPending}
+                  className="text-xs h-7 gap-1"
+                  data-testid={`button-approve-all-${childId}`}
+                >
+                  <CheckCheck className="w-3 h-3" />
+                  Approve All
+                </Button>
+              )}
+            </div>
+
+            {items.map(item => (
+              <div
+                key={`${item.chore_id}-${item.date_key}`}
+                className="flex items-center gap-3 p-3 rounded-xl border bg-yellow-50/50 dark:bg-yellow-900/10 border-yellow-200 dark:border-yellow-800/30"
+                data-testid={`pending-item-${item.chore_id}`}
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-sm truncate">{item.chore_title}</p>
+                  <p className="text-xs text-muted-foreground font-mono">+{item.points} pts</p>
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => rejectMutation.mutate({ childId: item.child_id, choreId: item.chore_id, dateKey: item.date_key })}
+                    disabled={rejectMutation.isPending}
+                    className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+                    data-testid={`button-reject-${item.chore_id}`}
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => approveMutation.mutate({ childId: item.child_id, choreId: item.chore_id, dateKey: item.date_key })}
+                    disabled={approveMutation.isPending}
+                    className="h-8 gap-1 bg-green-600 hover:bg-green-700 text-white"
+                    data-testid={`button-approve-${item.chore_id}`}
+                  >
+                    <Check className="w-4 h-4" />
+                    Approve
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 export default function ParentPanel() {
   const { activeChild } = useAuth();
 
@@ -1150,10 +1370,12 @@ export default function ParentPanel() {
             <p className="font-bold text-lg text-foreground" data-testid="text-active-child-name">{activeChild.displayName}</p>
           </div>
         )}
+        <PendingApprovalsSection />
         <FamilyNumberSection />
         <ChildManagementSection />
         <ChildPinSection />
         <BonusSection />
+        <VerificationSection />
         <ChoreConfigSection />
         <RewardConfigSection />
         <SummarySection />
