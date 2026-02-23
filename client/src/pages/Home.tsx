@@ -4,7 +4,7 @@ import { useModeChores } from "@/hooks/use-mode-data";
 import { useAuth } from "@/lib/auth-context";
 import { PointsDisplay } from "@/components/PointsDisplay";
 import { motion } from "framer-motion";
-import { CheckSquare, ShoppingBag, RotateCcw, Shield, Users, LogOut } from "lucide-react";
+import { CheckSquare, ShoppingBag, RotateCcw, Users, LogOut } from "lucide-react";
 
 function ParentZone() {
   const resetMutation = useResetChores();
@@ -29,12 +29,6 @@ function ParentZone() {
           )}
           Reset chores for tomorrow
         </button>
-        <Link href="/parent">
-          <div className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-primary/30 text-primary hover:bg-primary/5 transition-colors font-medium text-sm cursor-pointer" data-testid="link-parent-panel">
-            <Shield className="w-4 h-4" />
-            Open Parent Panel
-          </div>
-        </Link>
         <button
           onClick={clearChild}
           className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-muted-foreground/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors font-medium text-sm"

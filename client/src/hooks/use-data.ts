@@ -564,6 +564,82 @@ export function useUpdateRewardConfig() {
   });
 }
 
+export function useCreateReward() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { family } = useAuth();
+
+  return useMutation({
+    mutationFn: async (data: { title: string; category: string; cost: number; active?: boolean }) => {
+      const { error } = await supabase
+        .from("reward_catalog")
+        .insert({
+          family_id: family!.familyId,
+          title: data.title,
+          category: data.category,
+          cost: data.cost,
+          active: data.active ?? true,
+        });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["reward_catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["rewards"] });
+      toast({ title: "Reward added!" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
+export function useUpdateReward() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (data: { id: string; title?: string; category?: string; cost?: number; active?: boolean }) => {
+      const { id, ...updates } = data;
+      const { error } = await supabase
+        .from("reward_catalog")
+        .update(updates)
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["reward_catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["rewards"] });
+      toast({ title: "Reward updated!" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
+export function useArchiveReward() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (data: { id: string; active: boolean }) => {
+      const { error } = await supabase
+        .from("reward_catalog")
+        .update({ active: data.active })
+        .eq("id", data.id);
+      if (error) throw error;
+    },
+    onSuccess: (_d, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["reward_catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["rewards"] });
+      toast({ title: vars.active ? "Reward restored!" : "Reward archived!" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
   const { toast } = useToast();

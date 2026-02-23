@@ -6,8 +6,9 @@ import {
   useChoreCatalog, useRewardCatalog,
   useFamilySettings,
   usePendingApprovals, useApproveChore, useRejectChore,
+  useCreateReward, useUpdateReward, useArchiveReward,
 } from "@/hooks/use-data";
-import type { PendingApproval } from "@/hooks/use-data";
+import type { PendingApproval, RewardCatalogItem } from "@/hooks/use-data";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
@@ -21,7 +22,7 @@ import {
   ChevronDown, ChevronUp, Loader2,
   CheckSquare, ShoppingBag, UserPlus, LogOut, Users,
   Clock, Globe, Zap, Trash2, Copy, Check, Key, Shield,
-  ShieldCheck, X, CheckCheck,
+  ShieldCheck, X, CheckCheck, Plus, Search, Pencil, ArchiveRestore,
 } from "lucide-react";
 
 function BonusSection() {
@@ -231,117 +232,244 @@ function ChoreConfigSection() {
   );
 }
 
-function RewardConfigSection() {
+function RewardsManagementSection() {
   const { data: catalog } = useRewardCatalog();
-  const updateRewards = useUpdateRewardConfig();
-  const [localEnabled, setLocalEnabled] = useState<Record<string, boolean>>({});
-  const [localCosts, setLocalCosts] = useState<Record<string, number>>({});
-  const [expandedCat, setExpandedCat] = useState<string | null>(null);
-  const [initialized, setInitialized] = useState(false);
-
-  useEffect(() => {
-    if (catalog && catalog.length > 0 && !initialized) {
-      const enabled: Record<string, boolean> = {};
-      const costs: Record<string, number> = {};
-      catalog.forEach(r => {
-        enabled[r.id] = r.active;
-        costs[r.id] = r.cost;
-      });
-      setLocalEnabled(enabled);
-      setLocalCosts(costs);
-      setInitialized(true);
-    }
-  }, [catalog, initialized]);
-
-  const handleSave = () => {
-    updateRewards.mutate({ enabledRewards: localEnabled, costByRewardId: localCosts });
-  };
-
-  const toggleItem = (id: string) => {
-    setLocalEnabled(prev => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  const setItemCost = (id: string, cost: number) => {
-    setLocalCosts(prev => ({ ...prev, [id]: Math.max(0, Math.min(999999, cost)) }));
-  };
+  const createReward = useCreateReward();
+  const updateReward = useUpdateReward();
+  const archiveReward = useArchiveReward();
+  const [search, setSearch] = useState("");
+  const [filterCat, setFilterCat] = useState("all");
+  const [showArchived, setShowArchived] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{ title: string; category: string; cost: number }>({ title: "", category: "", cost: 0 });
+  const [showAdd, setShowAdd] = useState(false);
+  const [addForm, setAddForm] = useState({ title: "", category: "", newCategory: "", cost: 50 });
 
   const categories = catalog
-    ? Array.from(new Set(catalog.map(r => r.category)))
+    ? Array.from(new Set(catalog.map(r => r.category))).sort()
     : [];
+
+  const filtered = catalog
+    ?.filter(r => showArchived ? true : r.active)
+    .filter(r => filterCat === "all" || r.category === filterCat)
+    .filter(r => !search || r.title.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => a.category.localeCompare(b.category) || (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.title.localeCompare(b.title))
+    ?? [];
+
+  const startEdit = (item: RewardCatalogItem) => {
+    setEditingId(item.id);
+    setEditForm({ title: item.title, category: item.category, cost: item.cost });
+  };
+
+  const saveEdit = () => {
+    if (!editingId || !editForm.title.trim()) return;
+    updateReward.mutate(
+      { id: editingId, title: editForm.title.trim(), category: editForm.category.trim(), cost: editForm.cost },
+      { onSuccess: () => setEditingId(null) }
+    );
+  };
+
+  const handleAdd = () => {
+    const category = addForm.newCategory.trim() || addForm.category;
+    if (!addForm.title.trim() || !category || addForm.cost < 1) return;
+    createReward.mutate(
+      { title: addForm.title.trim(), category, cost: addForm.cost },
+      { onSuccess: () => { setShowAdd(false); setAddForm({ title: "", category: "", newCategory: "", cost: 50 }); } }
+    );
+  };
 
   return (
     <Card className="p-5">
-      <h3 className="font-display font-bold text-lg mb-2 flex items-center gap-2">
-        <ShoppingBag className="w-5 h-5 text-secondary" />
-        Reward Catalog
-      </h3>
-      <p className="text-sm text-muted-foreground mb-4">Toggle rewards on/off and set custom costs.</p>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-display font-bold text-lg flex items-center gap-2">
+          <ShoppingBag className="w-5 h-5 text-secondary" />
+          Reward Store Editor
+        </h3>
+        <Button
+          size="sm"
+          onClick={() => setShowAdd(!showAdd)}
+          className="gap-1"
+          data-testid="button-add-reward"
+        >
+          <Plus className="w-4 h-4" />
+          Add
+        </Button>
+      </div>
+      <p className="text-sm text-muted-foreground mb-4">Add, edit, or archive rewards. Archived rewards stay in history but hide from the kid store.</p>
 
-      <div className="space-y-2 mb-4">
-        {categories.map(catName => {
-          const items = catalog!.filter(r => r.category === catName);
-          const isExpanded = expandedCat === catName;
-          const enabledCount = items.filter(i => localEnabled[i.id]).length;
-          return (
-            <div key={catName} className="border rounded-xl overflow-hidden">
-              <button
-                onClick={() => setExpandedCat(isExpanded ? null : catName)}
-                className="w-full flex items-center justify-between p-4 text-left font-bold"
-                data-testid={`button-reward-cat-${catName}`}
-              >
-                <span>{catName} ({enabledCount}/{items.length})</span>
-                {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-              </button>
+      {showAdd && (
+        <div className="border-2 border-dashed border-secondary/40 rounded-xl p-4 mb-4 space-y-3 bg-secondary/5" data-testid="form-add-reward">
+          <p className="font-bold text-sm text-foreground">New Reward</p>
+          <input
+            type="text"
+            placeholder="Reward title"
+            value={addForm.title}
+            onChange={e => setAddForm(p => ({ ...p, title: e.target.value }))}
+            className="w-full p-2.5 rounded-lg border bg-background text-foreground text-sm"
+            data-testid="input-add-reward-title"
+          />
+          <div className="flex gap-2">
+            <select
+              value={addForm.category}
+              onChange={e => setAddForm(p => ({ ...p, category: e.target.value, newCategory: "" }))}
+              className="flex-1 p-2.5 rounded-lg border bg-background text-foreground text-sm"
+              data-testid="select-add-reward-category"
+            >
+              <option value="">Select category...</option>
+              {categories.map(c => <option key={c} value={c}>{c}</option>)}
+              <option value="__new__">+ New category</option>
+            </select>
+            {addForm.category === "__new__" && (
+              <input
+                type="text"
+                placeholder="Category name"
+                value={addForm.newCategory}
+                onChange={e => setAddForm(p => ({ ...p, newCategory: e.target.value }))}
+                className="flex-1 p-2.5 rounded-lg border bg-background text-foreground text-sm"
+                data-testid="input-add-reward-new-category"
+              />
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-bold text-muted-foreground">Cost:</label>
+            <input
+              type="number"
+              min="1"
+              max="999999"
+              value={addForm.cost}
+              onChange={e => setAddForm(p => ({ ...p, cost: parseInt(e.target.value) || 0 }))}
+              className="w-24 p-2.5 rounded-lg border bg-background text-foreground font-mono text-sm text-center"
+              data-testid="input-add-reward-cost"
+            />
+            <span className="text-sm text-muted-foreground">pts</span>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={handleAdd} disabled={createReward.isPending} size="sm" className="gap-1" data-testid="button-confirm-add-reward">
+              {createReward.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+              Save
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowAdd(false)} data-testid="button-cancel-add-reward">Cancel</Button>
+          </div>
+        </div>
+      )}
 
-              {isExpanded && (
-                <div className="border-t px-4 pb-3 space-y-3">
-                  {items.map(item => (
-                    <div key={item.id} className="flex items-center justify-between py-2 gap-3">
-                      <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={!!localEnabled[item.id]}
-                          onChange={() => toggleItem(item.id)}
-                          className="w-5 h-5 rounded accent-secondary shrink-0"
-                          data-testid={`checkbox-reward-${item.id}`}
-                        />
-                        <span className={cn(
-                          "font-medium text-sm truncate",
-                          localEnabled[item.id] ? "text-foreground" : "text-muted-foreground"
-                        )}>
-                          {item.title}
-                        </span>
-                      </label>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <input
-                          type="number"
-                          min="1"
-                          max="999999"
-                          value={localCosts[item.id] ?? item.cost}
-                          onChange={(e) => setItemCost(item.id, parseInt(e.target.value) || 0)}
-                          className="w-20 p-1.5 rounded-lg border bg-background text-foreground font-mono text-sm text-center"
-                          data-testid={`input-reward-cost-${item.id}`}
-                        />
-                        <span className="text-xs text-muted-foreground">pts</span>
-                      </div>
+      <div className="flex gap-2 mb-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Search rewards..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full pl-8 pr-3 py-2 rounded-lg border bg-background text-foreground text-sm"
+            data-testid="input-search-rewards"
+          />
+        </div>
+        <select
+          value={filterCat}
+          onChange={e => setFilterCat(e.target.value)}
+          className="p-2 rounded-lg border bg-background text-foreground text-sm"
+          data-testid="select-filter-reward-category"
+        >
+          <option value="all">All</option>
+          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+
+      <label className="flex items-center gap-2 text-xs text-muted-foreground mb-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={showArchived}
+          onChange={() => setShowArchived(!showArchived)}
+          className="w-4 h-4 rounded accent-secondary"
+          data-testid="checkbox-show-archived"
+        />
+        Show archived rewards
+      </label>
+
+      <div className="space-y-2 mb-2">
+        {filtered.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-6" data-testid="text-no-rewards">No rewards match your filters.</p>
+        ) : (
+          filtered.map(item => (
+            <div
+              key={item.id}
+              className={cn(
+                "border rounded-xl p-3 transition-colors",
+                !item.active && "opacity-60 bg-muted/30"
+              )}
+              data-testid={`reward-item-${item.id}`}
+            >
+              {editingId === item.id ? (
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    value={editForm.title}
+                    onChange={e => setEditForm(p => ({ ...p, title: e.target.value }))}
+                    className="w-full p-2 rounded-lg border bg-background text-foreground text-sm"
+                    data-testid={`input-edit-reward-title-${item.id}`}
+                  />
+                  <div className="flex gap-2">
+                    <select
+                      value={editForm.category}
+                      onChange={e => setEditForm(p => ({ ...p, category: e.target.value }))}
+                      className="flex-1 p-2 rounded-lg border bg-background text-foreground text-sm"
+                      data-testid={`select-edit-reward-category-${item.id}`}
+                    >
+                      {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min="1"
+                        max="999999"
+                        value={editForm.cost}
+                        onChange={e => setEditForm(p => ({ ...p, cost: parseInt(e.target.value) || 0 }))}
+                        className="w-20 p-2 rounded-lg border bg-background text-foreground font-mono text-sm text-center"
+                        data-testid={`input-edit-reward-cost-${item.id}`}
+                      />
+                      <span className="text-xs text-muted-foreground">pts</span>
                     </div>
-                  ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={saveEdit} disabled={updateReward.isPending} className="gap-1" data-testid={`button-save-edit-${item.id}`}>
+                      {updateReward.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                      Save
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setEditingId(null)} data-testid={`button-cancel-edit-${item.id}`}>Cancel</Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm text-foreground truncate" data-testid={`text-reward-title-${item.id}`}>{item.title}</p>
+                    <p className="text-xs text-muted-foreground">{item.category}</p>
+                  </div>
+                  <span className="font-mono font-bold text-sm text-foreground shrink-0" data-testid={`text-reward-cost-${item.id}`}>{item.cost} pts</span>
+                  <div className="flex gap-1 shrink-0">
+                    <button
+                      onClick={() => startEdit(item)}
+                      className="p-1.5 rounded-lg hover:bg-muted transition-colors"
+                      title="Edit"
+                      data-testid={`button-edit-reward-${item.id}`}
+                    >
+                      <Pencil className="w-4 h-4 text-muted-foreground" />
+                    </button>
+                    <button
+                      onClick={() => archiveReward.mutate({ id: item.id, active: !item.active })}
+                      className="p-1.5 rounded-lg hover:bg-muted transition-colors"
+                      title={item.active ? "Archive" : "Restore"}
+                      data-testid={`button-archive-reward-${item.id}`}
+                    >
+                      {item.active ? <Trash2 className="w-4 h-4 text-muted-foreground" /> : <ArchiveRestore className="w-4 h-4 text-green-600" />}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
-          );
-        })}
+          ))
+        )}
       </div>
-
-      <Button
-        onClick={handleSave}
-        disabled={updateRewards.isPending}
-        className="w-full"
-        data-testid="button-save-reward-config"
-      >
-        {updateRewards.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-        Save Reward Settings
-      </Button>
     </Card>
   );
 }
@@ -1377,7 +1505,7 @@ export default function ParentPanel() {
         <BonusSection />
         <VerificationSection />
         <ChoreConfigSection />
-        <RewardConfigSection />
+        <RewardsManagementSection />
         <SummarySection />
         <SettingsSection />
         <ParentPortalPinSection />
