@@ -1,0 +1,297 @@
+EPIC: Family Number + Kid PIN Join + Parent Portal PIN (Supabase-backed)
+
+Executive summary
+
+We will keep parents on standard Supabase Auth (email + password), and introduce a kid-friendly “Join a Family” flow where children sign in with only a Family Number + PIN (no email/password UI). We’ll also add a separate Parent Portal PIN so kids can’t enter Parent Zone and change settings even if the parent is logged in on a shared device.
+
+Key principles
+	•	Family UUID remains the true primary key (families.id).
+	•	Family Number is a unique public code (families.family_number) used for kid join.
+	•	Kids get a simple UX, while the backend remains secure and consistent.
+	•	Parent portal PIN is UI-level kid-proofing, not authorization (authorization remains Supabase RLS + roles).
+
+⸻
+
+Scope (what frontend must implement)
+
+In-app roles
+	•	Parent (authenticated): Supabase Auth session, can manage family settings, children, approvals, emails.
+	•	Child (session via join flow): can view/toggle chores, see points, redeem rewards (depending on rules), cannot access Parent Zone.
+
+⸻
+
+Data & Identity Model (frontend contract)
+
+Frontend assumes these fields exist via API/Supabase reads:
+	•	families: id, family_number
+	•	children: id, family_id, display_name (and optionally active)
+	•	family_settings: parent_portal_pin_enabled, parent_portal_pin_timeout_minutes (and existing email + timezone fields)
+
+SQL placeholders: DB team will add families.family_number, children.child_pin_hash, family_settings.parent_portal_pin_hash, etc. Frontend should treat these as present and rely on RPCs below.
+
+⸻
+
+Core user flows
+
+Flow 1: Parent signup/login (unchanged)
+	•	Parent logs in with email + password.
+	•	App resolves family_id and loads family settings and catalogs (existing bootstrap flow).
+	•	Parent can view/manage kids and settings.
+
+Flow 2: Child “Join a Family” (new)
+
+Child sees a new login choice:
+	•	“I’m a Parent”
+	•	“I’m a Kid (Join a Family)”
+
+Kid join steps:
+	1.	Enter Family Number (short code).
+	2.	Enter Kid PIN (4 digits).
+	3.	App verifies and returns a list of children (or a specific child).
+	4.	Kid selects their name (if list returned) → enters app as that child.
+
+Kid session handling:
+	•	Store kidSession locally (sessionStorage) with:
+	•	family_id
+	•	child_id
+	•	child_display_name
+	•	expires_at (e.g., 24h or “until browser close”)
+	•	This is a UI session; actual DB writes still must be authorized via RPCs.
+
+Flow 3: Parent Portal PIN (new)
+	•	Parent can enable a Parent Portal PIN in Parent Settings.
+	•	Any Parent Zone route requires PIN unlock if not already unlocked within timeout.
+	•	Unlock state stored in sessionStorage:
+	•	parentPortalUnlockedUntil timestamp
+
+⸻
+
+Required RPC/API endpoints (frontend calls)
+
+DB team will implement these. Frontend should code to this contract.
+
+1) Resolve family by family number
+
+RPC: get_family_by_number(p_family_number text)
+Returns: { family_id uuid } or error.
+
+2) Verify kid PIN and return children list
+
+RPC: verify_kid_join(p_family_number text, p_pin text)
+Returns:
+
+{
+  "ok": true,
+  "family_id": "uuid",
+  "children": [
+    { "child_id": "uuid", "display_name": "Fitz" },
+    { "child_id": "uuid", "display_name": "Merckx" }
+  ]
+}
+
+If invalid: { ok:false, error:"invalid_pin" }
+
+(This avoids exposing child identities without correct PIN.)
+
+3) Parent sets/changes kid PIN for a child (parent-only)
+
+RPC: set_child_pin(p_child_id uuid, p_pin text) → { ok:true }
+
+4) Parent Portal PIN
+	•	set_parent_portal_pin(p_family_id uuid, p_pin text) → { ok:true }
+	•	verify_parent_portal_pin(p_family_id uuid, p_pin text) → { ok:true } or { ok:false }
+	•	disable_parent_portal_pin(p_family_id uuid, p_pin text) → { ok:true }
+
+5) Authorize kid actions (if kid is not a Supabase Auth user)
+
+For kid actions, frontend calls server-side operations that validate:
+	•	family_number + PIN (or kidSession token) + child_id belongs to family
+	•	then perform action (toggle chore, redeem reward, etc.)
+
+Two viable patterns:
+	•	Pattern A (recommended): Issue a short-lived signed token at verify_kid_join and include it in subsequent requests.
+	•	Pattern B: Include family_number + PIN for each action (simple but more sensitive).
+
+Frontend should be built to Pattern A:
+	•	verify_kid_join returns kid_token
+	•	all kid actions send kid_token
+
+RPC examples
+	•	kid_toggle_chore(p_kid_token text, p_child_id uuid, p_chore_id uuid, p_date_key date)
+	•	kid_redeem_reward(p_kid_token text, p_child_id uuid, p_reward_id uuid)
+
+⸻
+
+Frontend implementation (detailed)
+
+A) Add “role selection” at login
+
+UI
+	•	Buttons:
+	•	“Parent Sign In”
+	•	“Kid Join a Family”
+
+Routing
+	•	/login (parent)
+	•	/join (kid)
+
+B) Kid Join screen /join
+
+Components:
+	•	Family Number input (uppercase, trim, allow hyphen optional)
+	•	PIN input (4 digits, masked)
+	•	Submit
+
+Behavior:
+	•	Call verify_kid_join(family_number, pin)
+	•	If ok:
+	•	Save kidSession + kid_token
+	•	Navigate to /kid/select if multiple children
+	•	Or directly into /kid/home if one child
+
+C) Kid Select screen /kid/select
+	•	Shows list of children returned
+	•	Click selects child:
+	•	store selected child_id in kidSession
+	•	route /kid/home
+
+D) App-wide auth state model
+
+Update auth context to support:
+	•	parentSession (Supabase user session)
+	•	kidSession (local session + kid_token)
+
+Priority:
+	•	If parentSession exists → parent mode
+	•	else if kidSession exists → kid mode
+	•	else → logged out
+
+E) Route guards
+
+Parent-only routes
+	•	/parent/** requires parentSession
+	•	additionally requires Parent Portal PIN unlock if enabled
+
+Kid-only routes
+	•	/kid/** requires kidSession
+
+Shared routes (optional)
+	•	/chores can route to either parent child selection or kid chores view depending on session type
+
+F) Parent Portal PIN gate
+
+Add a component ParentPortalGate used in Parent routes:
+	1.	Read family_settings.parent_portal_pin_enabled
+	2.	If disabled → allow
+	3.	If enabled:
+	•	Check sessionStorage parentPortalUnlockedUntil
+	•	If expired/missing → redirect to /parent/unlock?next=<current_path>
+
+/parent/unlock
+	•	PIN input
+	•	Calls verify_parent_portal_pin(family_id, pin)
+	•	On success:
+	•	set parentPortalUnlockedUntil = now + timeoutMinutes
+	•	redirect to next
+
+G) Parent Settings updates
+
+Add section “Parent Portal Lock”
+	•	Enable toggle
+	•	Set/change PIN
+	•	Set timeout minutes (15 default)
+
+Add section “Kid Join”
+	•	Show Family Number (read-only, copy button)
+	•	For each child:
+	•	Set/change PIN button
+
+⸻
+
+Required UI changes for chores + rewards screens
+
+In kid mode:
+	•	Hide Parent Zone links
+	•	Hide settings, approvals, email config, delete child
+	•	Keep:
+	•	checklist
+	•	points
+	•	store (if you allow redemptions for kids)
+
+All chore toggles and reward redeems must call kid-safe RPC endpoints that accept kid_token.
+
+In parent mode:
+	•	Existing functionality unchanged
+	•	Parent can optionally “View as kid” for a child (nice-to-have)
+
+⸻
+
+Error handling requirements (non-negotiable)
+
+Every RPC call must surface:
+	•	error.message
+	•	error.details
+	•	error.hint
+
+Kid join errors:
+	•	invalid family number → “Family not found”
+	•	invalid pin → “Try again”
+	•	expired token → “Session expired, re-join”
+
+⸻
+
+Acceptance criteria
+	1.	Parent can log in normally via email/password.
+	2.	Parent sees Family Number in Parent Zone and can copy it.
+	3.	Parent can set a PIN per child.
+	4.	Kid can join with Family Number + PIN and select a child profile.
+	5.	Kid cannot access Parent Zone routes (even if they know the URL).
+	6.	If parent is logged in on a shared device, Parent Zone requires a Parent Portal PIN to unlock.
+	7.	All kid actions (toggle chore, redeem reward) work and are auditable, and do not require kid email/password UI.
+
+⸻
+
+Backlog / follow-ons (explicitly not in this epic)
+	•	“Forgot kid PIN” recovery workflow
+	•	Parent portal PIN reset workflow (email verification)
+	•	Per-child restrictions (e.g., disable rewards for one child)
+	•	Multi-guardian parent roles + invite flows (can be layered later)
+
+⸻
+
+SQL placeholders (for DB developer)
+	•	[SQL PLACEHOLDER] Add families.family_number unique + generator
+	•	[SQL PLACEHOLDER] Add hashed PIN fields:
+	•	children.child_pin_hash
+	•	family_settings.parent_portal_pin_hash
+	•	[SQL PLACEHOLDER] Add RPCs listed above (verify, set, disable, kid_token issuance)
+	•	[SQL PLACEHOLDER] Add RLS/policies to prevent direct kid access without RPC/token
+
+⸻
+
+Minimal code guidance (frontend snippets)
+
+Kid session storage shape
+
+type KidSession = {
+  familyNumber: string;
+  familyId: string;
+  kidToken: string; // returned from verify_kid_join
+  childId?: string;
+  childName?: string;
+  expiresAt: number;
+};
+
+Parent portal unlock storage
+
+sessionStorage.setItem(
+  "parentPortalUnlockedUntil",
+  String(Date.now() + timeoutMinutes * 60_000)
+);
+
+Universal “current mode”
+
+const mode = parentSession ? "parent" : kidSession ? "kid" : "guest";
+
+
+⸻

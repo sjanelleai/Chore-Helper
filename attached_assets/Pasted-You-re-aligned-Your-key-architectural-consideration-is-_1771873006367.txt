@@ -1,0 +1,249 @@
+You’re aligned. Your “key architectural consideration” is the real one: kids won’t have a Supabase Auth session, so you can’t rely on RLS + the Supabase JS client for kid reads/writes. The clean approach is exactly what you wrote: kid-only reads/writes go through RPCs (or Edge Functions) that validate a kid_token against a kid_sessions table.
+
+Below is a build plan you can hand to your frontend dev. It’s scoped to app changes only, with SQL placeholders for your DB dev to implement in v7.
+
+⸻
+
+EPIC Build Plan: Parent Auth + Kid Join + Parent Portal PIN
+
+Guiding decisions
+	•	Parents use Supabase Auth (email/password) → existing RLS-based Supabase JS reads/writes remain valid for parents.
+	•	Kids use family number + kid PIN → no Supabase Auth session for kids.
+	•	Kids use kid_token (Pattern A) → token stored in kid_sessions with expiry.
+	•	Frontend reuses existing pages; UI adapts by mode (parent vs kid) rather than separate /kid routes.
+
+⸻
+
+Task 1 — Add “mode” to app auth state (Parent / Kid / Guest)
+
+Deliverable
+
+A single source of truth for session mode:
+	•	parentSession: Supabase Auth session (existing)
+	•	kidSession: stored in sessionStorage (new)
+	•	mode = "parent" | "kid" | "guest"
+
+Frontend implementation
+
+Create useAppSession() (or extend auth context):
+
+type KidSession = {
+  familyId: string;
+  familyNumber: string;
+  kidToken: string;
+  childId?: string;
+  childName?: string;
+  expiresAt: number; // unix ms
+};
+
+function loadKidSession(): KidSession | null {
+  const raw = sessionStorage.getItem("kidSession");
+  if (!raw) return null;
+  try {
+    const s = JSON.parse(raw) as KidSession;
+    if (!s.expiresAt || Date.now() > s.expiresAt) return null;
+    return s;
+  } catch {
+    return null;
+  }
+}
+
+function saveKidSession(s: KidSession) {
+  sessionStorage.setItem("kidSession", JSON.stringify(s));
+}
+
+Mode resolution:
+	•	If parent auth session exists → mode=parent
+	•	Else if kidSession exists and not expired → mode=kid
+	•	Else → mode=guest
+
+⸻
+
+Task 2 — Add Role Choice + Kid Join flow UI
+
+Deliverable
+
+A simple entry point:
+	•	“I’m a Parent” → existing login
+	•	“Join a Family” → new join screen
+
+UI routes
+	•	/login (parent login)
+	•	/join (kid join + child select)
+
+Join screen behavior
+
+Inputs:
+	•	family number (text)
+	•	PIN (4 digits)
+
+Call DB RPC (placeholder):
+	•	[SQL PLACEHOLDER] verify_kid_join(p_family_number, p_pin) → returns { ok, family_id, kid_token, children[] }
+
+Frontend logic:
+	1.	Call verify_kid_join
+	2.	If ok:
+	•	store kidSession = { familyId, familyNumber, kidToken, expiresAt: now + 24h }
+	•	if children.length == 1 → auto-select
+	•	else show child select list
+
+Child select:
+	•	user taps a child → store childId, childName in kidSession → navigate to app home (existing route)
+
+⸻
+
+Task 3 — Centralize data access behind a “data adapter” layer
+
+Goal
+
+Keep existing parent Supabase queries intact, but for kids route data through token-backed endpoints.
+
+Deliverable
+
+A “data adapter” that exposes the same interface for both modes:
+	•	getChores()
+	•	toggleChore()
+	•	getRewards()
+	•	redeemReward()
+	•	getPointsSummary()
+	•	getBadges() (if needed)
+	•	getDailySummary() (optional)
+
+Parent mode implementation
+
+Keep current Supabase JS client + RLS reads/writes.
+
+Kid mode implementation
+
+Replace Supabase JS reads/writes with RPC calls that accept kid_token:
+	•	[SQL PLACEHOLDER] kid_get_catalog(p_kid_token) (chores + rewards)
+	•	[SQL PLACEHOLDER] kid_get_points(p_kid_token, p_child_id)
+	•	[SQL PLACEHOLDER] kid_toggle_chore(p_kid_token, p_child_id, p_chore_id, p_date_key)
+	•	[SQL PLACEHOLDER] kid_redeem_reward(p_kid_token, p_child_id, p_reward_id)
+
+Frontend pattern:
+
+if (mode === "parent") return supabase.from(...).select(...)
+if (mode === "kid") return supabase.rpc("kid_get_catalog", { p_kid_token: kidToken })
+
+Important: For kids, you will mostly use .rpc(...) only.
+
+⸻
+
+Task 4 — Reuse existing pages, hide parent-only UI
+
+Deliverable
+
+Keep routes unchanged but conditionally render:
+	•	Parent-only: Parent Zone, settings, approvals, emails, delete child, catalog management, add child
+	•	Kid-only: chore checklist, points view, rewards store, badges
+
+Implementation:
+	•	if (mode === "kid") hide parent nav items and block parent routes.
+	•	If a kid navigates to a parent route directly → redirect to /join or /login.
+
+⸻
+
+Task 5 — Parent Portal PIN gate (UI-level lock)
+
+Deliverable
+
+If family_settings.parent_portal_pin_enabled = true, require PIN before entering Parent Zone.
+
+Flow:
+	•	Parent clicks “Parent Zone”
+	•	If locked → /parent/unlock?next=/parent
+	•	Unlock calls RPC:
+	•	[SQL PLACEHOLDER] verify_parent_portal_pin(p_family_id, p_pin) → {ok:true/false}
+	•	On success:
+	•	set sessionStorage.parentPortalUnlockedUntil = now + timeoutMinutes
+
+This is UI-level, not authorization; destructive operations must still be restricted by parent auth + RLS.
+
+⸻
+
+Task 6 — Parent Settings additions
+
+Deliverable
+
+In Parent Settings:
+	•	show Family Number (read-only + copy)
+	•	manage Parent Portal PIN:
+	•	enable/disable
+	•	set/change PIN
+	•	timeout minutes
+	•	manage each child’s PIN:
+	•	“Set PIN” / “Change PIN”
+
+RPC placeholders:
+	•	[SQL PLACEHOLDER] set_parent_portal_pin(p_family_id, p_pin)
+	•	[SQL PLACEHOLDER] disable_parent_portal_pin(p_family_id, p_pin)
+	•	[SQL PLACEHOLDER] set_child_pin(p_child_id, p_pin)
+	•	[SQL PLACEHOLDER] get_family_number(p_family_id) (or stored on families row)
+
+⸻
+
+Task 7 — Ensure “child selection” works for both modes
+
+Parent mode
+
+Use existing child selection flow (child list from Supabase).
+
+Kid mode
+
+Child list is returned from verify_kid_join response (and optionally a kid_list_children RPC).
+
+Once a child is selected, the rest of the app uses kidSession.childId.
+
+⸻
+
+Task 8 — Consistency + cache invalidation
+
+Deliverable
+
+After any write:
+	•	toggle chore
+	•	redeem reward
+	•	grant bonus (parent-only)
+
+Invalidate/refetch:
+	•	chores completion state
+	•	points
+	•	rewards availability
+	•	daily summary
+
+Ensure kid mode invalidation targets RPC query keys.
+
+⸻
+
+Task 9 — Hardening: failures must be visible
+
+Deliverable
+
+No “nothing happens” states:
+	•	show error toast with message | details | hint
+	•	show inline “Retry” button where appropriate
+
+⸻
+
+Task 10 — QA scenarios (must pass)
+	1.	Parent signup/login works.
+	2.	Parent sees family number; can set child PIN(s).
+	3.	Kid joins with family number + PIN; selects child; sees chores + rewards.
+	4.	Kid toggles chores; points update immediately.
+	5.	Kid cannot access Parent Zone routes.
+	6.	Parent portal PIN enabled blocks Parent Zone until PIN entered.
+	7.	Invited/secondary parent logs in (normal parent auth) and can manage family.
+
+⸻
+
+SQL placeholders (for DB dev, v7)
+	•	Add families.family_number unique + generator
+	•	Add children.child_pin_hash
+	•	Add family_settings.parent_portal_pin_hash, parent_portal_pin_enabled, parent_portal_pin_timeout_minutes
+	•	Add kid_sessions table (kid_token, family_id, expires_at, optional child_id)
+	•	RPCs: verify_kid_join, kid_get_catalog, kid_toggle_chore, kid_redeem_reward, set_child_pin, verify_parent_portal_pin, etc.
+
+⸻
+
+If you want, I can convert this into a crisp set of dev tickets (10 tickets aligned to the tasks above) with acceptance criteria per ticket.
