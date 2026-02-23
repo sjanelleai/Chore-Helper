@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { QueryClient } from "@tanstack/react-query";
 
+const LATEST_CATALOG_VERSION = 1;
+
 interface EnsureCatalogSeededParams {
   supabase: SupabaseClient;
   queryClient: QueryClient;
@@ -12,32 +14,31 @@ export async function ensureCatalogSeeded({
   queryClient,
   familyId,
 }: EnsureCatalogSeededParams): Promise<{ seeded: boolean }> {
-  const choresCount = await supabase
-    .from("chore_catalog")
-    .select("id", { count: "exact", head: true })
-    .eq("family_id", familyId);
+  const { data: settings, error: settingsErr } = await supabase
+    .from("family_settings")
+    .select("catalog_version")
+    .eq("family_id", familyId)
+    .single();
 
-  if (choresCount.error) throw choresCount.error;
+  if (settingsErr && settingsErr.code !== "PGRST116") throw settingsErr;
 
-  const rewardsCount = await supabase
-    .from("reward_catalog")
-    .select("id", { count: "exact", head: true })
-    .eq("family_id", familyId);
+  const currentVersion = settings?.catalog_version ?? 0;
 
-  if (rewardsCount.error) throw rewardsCount.error;
+  if (currentVersion >= LATEST_CATALOG_VERSION) {
+    return { seeded: false };
+  }
 
-  const needsSeed =
-    (choresCount.count ?? 0) === 0 || (rewardsCount.count ?? 0) === 0;
+  const { data: result, error: seedError } = await supabase.rpc("seed_default_catalog", {
+    p_family_id: familyId,
+  });
+  if (seedError) throw seedError;
 
-  if (needsSeed) {
-    const { error: seedError } = await supabase.rpc("seed_default_catalog", {
-      p_family_id: familyId,
-    });
-    if (seedError) throw seedError;
+  const didSeed = result?.seeded === true;
 
+  if (didSeed) {
     queryClient.invalidateQueries({ queryKey: ["chore_catalog", familyId] });
     queryClient.invalidateQueries({ queryKey: ["reward_catalog", familyId] });
   }
 
-  return { seeded: needsSeed };
+  return { seeded: didSeed };
 }

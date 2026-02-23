@@ -48,115 +48,46 @@ Deno.serve(async (req) => {
       throw new Error("No recipient emails configured");
     }
 
-    const { data: children, error: childErr } = await supabase
-      .from("children")
-      .select("id, display_name")
-      .eq("family_id", family_id)
-      .order("created_at");
+    // Use canonical family_daily_summary RPC — single source of truth
+    const { data: summaryRows, error: summaryErr } = await supabase.rpc("family_daily_summary", {
+      p_family_id: family_id,
+      p_date_key: date_key,
+    });
 
-    if (childErr) throw new Error(`Failed to load children: ${childErr.message}`);
-    if (!children || children.length === 0) {
-      throw new Error("No children in family");
-    }
-
-    const childIds = children.map((c) => c.id);
-    const tz = settings.timezone || "America/Denver";
-
-    const { data: allChores } = await supabase
-      .from("chore_catalog")
-      .select("id, title")
-      .eq("family_id", family_id)
-      .eq("active", true);
-
-    const choreMap = new Map((allChores || []).map((c) => [c.id, c.title]));
-
-    const { data: dailyStatuses } = await supabase
-      .from("daily_status_v2")
-      .select("child_id, chore_id, completed")
-      .eq("date_key", date_key)
-      .in("child_id", childIds);
-
-    // Convert local day boundaries to UTC for querying timestamptz columns
-    const tzOffsetMs = (() => {
-      const utcNoon = new Date(`${date_key}T12:00:00Z`);
-      const localStr = utcNoon.toLocaleString("en-US", { timeZone: tz });
-      const localDate = new Date(localStr);
-      return localDate.getTime() - utcNoon.getTime();
-    })();
-
-    const dayStartUTC = new Date(new Date(`${date_key}T00:00:00`).getTime() - tzOffsetMs).toISOString();
-    const dayEndUTC = new Date(new Date(`${date_key}T23:59:59.999`).getTime() - tzOffsetMs).toISOString();
-
-    const { data: ledgerRows } = await supabase
-      .from("points_ledger")
-      .select("child_id, event_type, points_delta, ref_type, note")
-      .in("child_id", childIds)
-      .gte("created_at", dayStartUTC)
-      .lte("created_at", dayEndUTC);
-
-    const { data: redemptionRows } = await supabase
-      .from("reward_redemptions")
-      .select("child_id, cost, reward_id, reward_catalog(title)")
-      .in("child_id", childIds)
-      .gte("created_at", dayStartUTC)
-      .lte("created_at", dayEndUTC);
-
-    const { data: balanceRows } = await supabase
-      .from("points_ledger")
-      .select("child_id, points_delta")
-      .in("child_id", childIds);
-
-    const balanceMap = new Map<string, number>();
-    for (const row of balanceRows || []) {
-      balanceMap.set(row.child_id, (balanceMap.get(row.child_id) || 0) + row.points_delta);
+    if (summaryErr) throw new Error(`family_daily_summary failed: ${summaryErr.message}`);
+    if (!summaryRows || summaryRows.length === 0) {
+      throw new Error("No children in family or no summary data");
     }
 
     let totalCompleted = 0;
     let totalMissed = 0;
     let totalPointsEarned = 0;
 
-    const childSummaries: ChildSummary[] = children.map((child) => {
-      const statuses = (dailyStatuses || []).filter((s) => s.child_id === child.id);
-
-      const completedChoreIds = new Set(statuses.map((s) => s.chore_id));
-      const completedChores: string[] = [];
-      const missedChores: string[] = [];
-
-      for (const [choreId, title] of choreMap) {
-        if (completedChoreIds.has(choreId)) {
-          completedChores.push(title);
-        } else {
-          missedChores.push(title);
-        }
-      }
-
-      const childLedger = (ledgerRows || []).filter((l) => l.child_id === child.id);
-      const bonuses = childLedger
-        .filter((l) => l.event_type === "bonus")
-        .map((l) => ({ reason: l.note || "Bonus", points: l.points_delta, note: l.note }));
-
-      const childRedemptions = (redemptionRows || []).filter((r) => r.child_id === child.id);
-      const redemptions = childRedemptions.map((r) => ({
-        name: (r.reward_catalog as any)?.title || "Reward",
+    const childSummaries: ChildSummary[] = summaryRows.map((row: any) => {
+      const completedChores: string[] = row.completed_chores || [];
+      const missedChores: string[] = row.missed_chores || [];
+      const bonuses = (row.bonuses || []).map((b: any) => ({
+        reason: b.reason || "Bonus",
+        points: b.points,
+        note: b.reason || null,
+      }));
+      const redemptions = (row.redemptions || []).map((r: any) => ({
+        name: r.name || "Reward",
         cost: r.cost,
       }));
 
-      const pointsEarnedToday = childLedger
-        .filter((l) => l.points_delta > 0)
-        .reduce((sum, l) => sum + l.points_delta, 0);
-
       totalCompleted += completedChores.length;
       totalMissed += missedChores.length;
-      totalPointsEarned += pointsEarnedToday;
+      totalPointsEarned += row.points_today || 0;
 
       return {
-        childName: child.display_name,
+        childName: row.child_name,
         completedChores,
         missedChores,
         bonuses,
         redemptions,
-        pointsEarnedToday,
-        currentBalance: balanceMap.get(child.id) || 0,
+        pointsEarnedToday: row.points_today || 0,
+        currentBalance: row.current_balance || 0,
       };
     });
 

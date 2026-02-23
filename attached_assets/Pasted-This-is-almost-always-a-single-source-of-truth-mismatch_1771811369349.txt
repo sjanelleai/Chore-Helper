@@ -1,0 +1,198 @@
+This is almost always a single-source-of-truth mismatch: one part of the app is computing “points today” differently than another (UI vs email summary vs dashboard). The fix is to make one canonical calculation and have everything use it.
+
+Below is the Chore Helper–specific contract to give your developer.
+
+⸻
+
+Root cause to eliminate
+
+Points “earned today” must be derived from one place:
+	•	Completion truth: daily_status_v2 (child_id, chore_id, date_key)
+	•	Points truth: points_ledger (each points event row)
+
+If any UI/email is doing “sum of completed chore points” while another uses ledger, or if timezones are inconsistent, totals will disagree.
+
+⸻
+
+Canonical definition: “points earned today”
+
+For a given child and a given local day (based on family_settings.timezone):
+
+points_today = SUM(points_ledger.points_delta) for that child where the ledger row timestamp falls within the local day boundary.
+
+Include all point sources that affect the total shown to parents:
+	•	chore completes/unchecks (from toggle_chore)
+	•	bonuses (from grant_bonus)
+	•	reward redemptions (negative points from redeem_reward)
+	•	any other ledger events you’ve implemented
+
+Do not compute “points today” by re-summing chore_catalog points from daily_status. That will drift as soon as:
+	•	a chore is toggled twice
+	•	bonus points are added
+	•	a redemption happens
+	•	point values change later in the catalog
+
+⸻
+
+Make the whole app match (required changes)
+
+1) Ensure toggle_chore ledger writes are correct
+
+When a chore is checked:
+	•	insert +v_points into points_ledger
+When unchecked:
+	•	insert -v_points
+
+This must already be true after your v5 work. The important part: those ledger rows must carry a reliable time field you can filter by day:
+	•	either created_at (preferred)
+	•	or date_key (if your ledger schema includes it)
+
+2) Standardize daily boundaries with timezone
+
+Everything that produces “today” must use:
+	•	family_settings.timezone (IANA string like America/Denver)
+
+3) Use one canonical “daily summary” query function
+
+Create a single SQL function that returns:
+	•	points_today (ledger-based)
+	•	chores_completed_count (from daily_status_v2)
+	•	chores_completed list (join chore_catalog.title)
+	•	chores_missed list (active chores not in completed set)
+	•	redemptions list (if needed)
+	•	bonuses list (if needed)
+
+Then:
+	•	the Parent Panel summary UI
+	•	the email Edge Function
+	•	any “today points” widgets
+must call this function (or implement the same query logic verbatim).
+
+⸻
+
+Drop-in Supabase SQL: Canonical daily points (timezone-safe)
+
+This function computes UTC start/end for a given date_key in a given timezone, then sums ledger deltas inside that window.
+
+Uses created_at in points_ledger. If your ledger uses a different timestamp field, change created_at.
+
+create or replace function public.points_earned_for_day(
+  p_child_id uuid,
+  p_date_key date,
+  p_timezone text
+)
+returns int
+language sql
+stable
+as $$
+  with bounds as (
+    select
+      -- Convert local midnight -> UTC timestamp
+      ((p_date_key::timestamp at time zone p_timezone)) as utc_start,
+      (((p_date_key + 1)::timestamp at time zone p_timezone)) as utc_end
+  )
+  select coalesce(sum(pl.points_delta), 0)::int
+  from public.points_ledger pl
+  join bounds b on true
+  where pl.child_id = p_child_id
+    and pl.created_at >= b.utc_start
+    and pl.created_at <  b.utc_end;
+$$;
+
+grant execute on function public.points_earned_for_day(uuid, date, text) to authenticated;
+
+Now you can use this everywhere.
+
+⸻
+
+Canonical family daily summary (one call for UI + email)
+
+This returns one row per child with:
+	•	points_today (ledger-based)
+	•	chores_completed_count (from daily_status_v2)
+	•	plus arrays of completed/missed chore titles
+
+create or replace function public.family_daily_summary(
+  p_family_id uuid,
+  p_date_key date
+)
+returns table (
+  child_id uuid,
+  child_name text,
+  points_today int,
+  completed_count int,
+  completed_chores text[],
+  missed_chores text[]
+)
+language sql
+stable
+as $$
+  with fs as (
+    select coalesce(timezone, 'America/Denver') as tz
+    from public.family_settings
+    where family_id = p_family_id
+  ),
+  kids as (
+    select id as child_id, display_name as child_name
+    from public.children
+    where family_id = p_family_id
+  ),
+  active_chores as (
+    select id as chore_id, title
+    from public.chore_catalog
+    where family_id = p_family_id
+      and coalesce(active, true) = true
+  ),
+  completed as (
+    select ds.child_id, ds.chore_id
+    from public.daily_status_v2 ds
+    join kids k on k.child_id = ds.child_id
+    where ds.date_key = p_date_key
+      and ds.completed = true
+  )
+  select
+    k.child_id,
+    k.child_name,
+    public.points_earned_for_day(k.child_id, p_date_key, (select tz from fs)) as points_today,
+    (select count(*) from completed c where c.child_id = k.child_id)::int as completed_count,
+    (select array_agg(ac.title order by ac.title)
+       from completed c
+       join active_chores ac on ac.chore_id = c.chore_id
+      where c.child_id = k.child_id
+    ) as completed_chores,
+    (select array_agg(ac.title order by ac.title)
+       from active_chores ac
+      where not exists (
+        select 1 from completed c
+        where c.child_id = k.child_id and c.chore_id = ac.chore_id
+      )
+    ) as missed_chores
+  from kids k
+  order by k.child_name;
+$$;
+
+grant execute on function public.family_daily_summary(uuid, date) to authenticated;
+
+
+⸻
+
+Developer instructions (make it match everywhere)
+	1.	UI “today points”: replace any local computations with family_daily_summary() (or points_earned_for_day() per child).
+	2.	Email Edge Function: build the email from family_daily_summary() results for the target date_key and family_id.
+	3.	Remove any “sum chore_catalog points from daily_status” logic used for points totals.
+	4.	If you cache points, invalidate/refetch after:
+	•	toggle_chore
+	•	grant_bonus
+	•	redeem_reward
+
+⸻
+
+Acceptance criteria (how you know it’s fixed)
+
+For the same child and same day:
+	•	Points shown in the chore screen
+	•	Points shown in parent summary screen
+	•	Points shown in the email summary
+are identical and match SUM(points_ledger.points_delta) for that day boundary in the family timezone.
+
+⸻

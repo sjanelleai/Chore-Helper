@@ -232,6 +232,7 @@ export function useToggleChore() {
       queryClient.invalidateQueries({ queryKey: ["child_points"] });
       queryClient.invalidateQueries({ queryKey: ["badges"] });
       queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      queryClient.invalidateQueries({ queryKey: ["family_summary"] });
 
       if (data.completed) {
         toast({
@@ -323,6 +324,7 @@ export function useRedeemReward() {
       queryClient.invalidateQueries({ queryKey: ["child_points"] });
       queryClient.invalidateQueries({ queryKey: ["redemptions"] });
       queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      queryClient.invalidateQueries({ queryKey: ["family_summary"] });
       toast({
         title: "Reward Redeemed!",
         description: `You got ${data.rewardTitle}!`,
@@ -577,6 +579,7 @@ export function useAwardBonus() {
       queryClient.invalidateQueries({ queryKey: ["child_points"] });
       queryClient.invalidateQueries({ queryKey: ["ledger"] });
       queryClient.invalidateQueries({ queryKey: ["badges"] });
+      queryClient.invalidateQueries({ queryKey: ["family_summary"] });
 
       if (data.newBadges?.length > 0) {
         data.newBadges.forEach((badge) => {
@@ -633,92 +636,39 @@ export interface FamilySummary {
 }
 
 export function useFamilySummary(date?: string) {
-  const { family, children: kids } = useAuth();
-  const { data: catalog } = useChoreCatalog();
+  const { family } = useAuth();
 
   return useQuery<FamilySummary | null>({
     queryKey: ["family_summary", family?.familyId, date],
-    enabled: !!family && !!catalog && kids.length > 0,
+    enabled: !!family?.familyId,
     queryFn: async () => {
-      if (!family || !catalog || kids.length === 0) return null;
+      if (!family?.familyId) return null;
 
       const today = date || localDateKey(new Date());
-      const activeChores = catalog.filter(c => c.active);
 
-      const childSummaries: ChildDailySummary[] = [];
+      const { data: rows, error } = await supabase.rpc("family_daily_summary", {
+        p_family_id: family.familyId,
+        p_date_key: today,
+      });
 
-      for (const kid of kids) {
-        const [ledgerRes, dailyRes, pointsRes, redemptionsRes] = await Promise.all([
-          supabase
-            .from("points_ledger")
-            .select("*")
-            .eq("child_id", kid.id)
-            .gte("created_at", `${today}T00:00:00.000Z`)
-            .lte("created_at", `${today}T23:59:59.999Z`)
-            .order("created_at"),
-          supabase
-            .from("daily_status_v2")
-            .select("chore_id, completed")
-            .eq("child_id", kid.id)
-            .eq("date_key", today),
-          supabase
-            .from("points_ledger")
-            .select("points_delta")
-            .eq("child_id", kid.id),
-          supabase
-            .from("reward_redemptions")
-            .select("cost, reward_catalog(title)")
-            .eq("child_id", kid.id)
-            .gte("created_at", `${today}T00:00:00.000Z`)
-            .lte("created_at", `${today}T23:59:59.999Z`),
-        ]);
+      if (error) throw error;
 
-        const completedSet = new Set<string>();
-        if (dailyRes.data) {
-          for (const row of dailyRes.data) {
-            if (row.completed) completedSet.add(row.chore_id);
-          }
-        }
-
-        const completedChores: string[] = [];
-        const missedChores: string[] = [];
-        activeChores.forEach(c => {
-          if (completedSet.has(c.id)) {
-            completedChores.push(c.title);
-          } else {
-            missedChores.push(c.title);
-          }
-        });
-
-        const ledgerArr = ledgerRes.data || [];
-        const bonuses = ledgerArr
-          .filter((e: any) => e.event_type === "bonus")
-          .map((e: any) => ({
-            reason: e.note || "Bonus",
-            points: e.points_delta,
-            note: e.note || null,
-          }));
-
-        const redemptions = (redemptionsRes.data || []).map((r: any) => ({
-          name: r.reward_catalog?.title || "Unknown",
+      const childSummaries: ChildDailySummary[] = (rows || []).map((row: any) => ({
+        childName: row.child_name,
+        completedChores: row.completed_chores || [],
+        missedChores: row.missed_chores || [],
+        bonuses: (row.bonuses || []).map((b: any) => ({
+          reason: b.reason || "Bonus",
+          points: b.points,
+          note: b.reason || null,
+        })),
+        redemptions: (row.redemptions || []).map((r: any) => ({
+          name: r.name || "Reward",
           cost: r.cost,
-        }));
-
-        const pointsEarnedToday = ledgerArr.reduce((sum: number, e: any) => sum + e.points_delta, 0);
-
-        const allPoints = pointsRes.data || [];
-        const currentBalance = allPoints.reduce((sum: number, r: any) => sum + r.points_delta, 0);
-
-        childSummaries.push({
-          childName: kid.displayName,
-          completedChores,
-          missedChores,
-          bonuses,
-          redemptions,
-          pointsEarnedToday,
-          currentBalance,
-        });
-      }
+        })),
+        pointsEarnedToday: row.points_today || 0,
+        currentBalance: row.current_balance || 0,
+      }));
 
       return {
         date: today,

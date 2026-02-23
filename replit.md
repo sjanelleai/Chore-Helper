@@ -18,6 +18,7 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - **Migration v3**: `supabase-migration-v3.sql` — adds database-backed catalogs (chore_catalog, reward_catalog), points_ledger, reward_redemptions, daily_status (legacy array-based), and RPCs. Run AFTER v2.
 - **Migration v4**: `supabase-migration-v4.sql` — adds email_send_log table, remove_child RPC, performance indexes. Run AFTER v3.
 - **Migration v5**: `supabase-migration-v5.sql` — **CRITICAL alignment fix**: creates daily_status_v2 (per-chore-row model), adds title column to catalog tables, rewrites toggle_chore RPC with points_ledger writes. Run AFTER v4.
+- **Migration v6**: `supabase-migration-v6.sql` — Canonical points functions (`points_earned_for_day`, `family_daily_summary`), catalog versioning (`family_settings.catalog_version`), versioned `seed_default_catalog` RPC. Run AFTER v5.
 
 ## Auth Flow
 1. Parent signs up with email + password (min 8 chars) → Supabase Auth creates user
@@ -71,7 +72,7 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 
 ### Key Design Decisions
 - **Catalog is database-backed**: chore_catalog and reward_catalog tables store per-family catalog items. Auto-seeded via `ensureCatalogSeeded()` in auth bootstrap (right after familyId is resolved). The `seed_default_catalog` RPC is idempotent — safe to call multiple times.
-- **Points are derived**: No separate child_points table. Points computed from `SUM(points_delta)` on points_ledger.
+- **Points are derived**: No separate child_points table. Points computed from `SUM(points_delta)` on points_ledger. **Canonical daily points** use `points_earned_for_day()` (timezone-safe) and `family_daily_summary()` — both UI and email use the same RPC.
 - **All mutations go through RPCs**: toggle_chore, redeem_reward, grant_bonus, add_child — for security and business logic consistency.
 - `family_settings` stores email + daily summary preferences only (NOT catalog config)
 - `family_members` has `user_id` as primary key (one family per parent)
@@ -86,6 +87,8 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `redeem_reward(p_child_id, p_reward_id)` - Redeems reward, checks balance, writes to reward_redemptions + points_ledger atomically.
 - `grant_bonus(p_child_id, p_points, p_reason)` - Awards bonus points, writes to points_ledger.
 - `seed_default_catalog(p_family_id)` - Seeds chore_catalog + reward_catalog from STARTER constants if empty. Idempotent. Called automatically by `ensureCatalogSeeded()` during auth bootstrap.
+- `points_earned_for_day(p_child_id, p_date_key, p_timezone)` - Canonical timezone-safe daily points from ledger. Used by family_daily_summary.
+- `family_daily_summary(p_family_id, p_date_key)` - Canonical daily summary: points_today, completed/missed chores, bonuses, redemptions, balance. Single source of truth for UI + email.
 - `remove_child(p_child_id)` - Deletes a child and all associated data (daily_status_v2, daily_status, points_ledger, reward_redemptions, child_badges). Only callable by family members.
 
 ## Key Pages
@@ -108,6 +111,8 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - Parents can toggle items on/off and set custom points/costs via Parent Panel (writes directly to catalog tables)
 - `useChoreCatalog()` and `useRewardCatalog()` hooks are pure readers (no seeding logic)
 - Seeding handled centrally by `ensureCatalogSeeded()` in auth bootstrap
+- **Catalog versioning**: `family_settings.catalog_version` tracks which version each family has. `seed_default_catalog` RPC is versioned — when `catalog_version < LATEST_VERSION`, upserts missing items and bumps version. `ensureCatalogSeeded()` checks version first, not row count.
+- To add new catalog items: bump `v_latest_version` in the RPC, add new inserts in a `if v_current_version < N` block, update `LATEST_CATALOG_VERSION` in `catalogSeed.ts`
 
 ## Key Files
 - `supabase-setup.sql` - Original database setup (reference)
@@ -115,6 +120,7 @@ A multi-family gamified chore-tracking app for kids with parent control panels. 
 - `supabase-migration-v3.sql` - Database-backed catalogs, points_ledger, RPCs
 - `supabase-migration-v4.sql` - email_send_log table, remove_child RPC, recommended indexes
 - `supabase-migration-v5.sql` - CRITICAL: daily_status_v2 (per-chore-row), catalog title columns, rewritten toggle_chore RPC
+- `supabase-migration-v6.sql` - Canonical points functions, catalog versioning, versioned seed_default_catalog
 - `client/src/lib/supabase.ts` - Supabase client configuration
 - `client/src/lib/auth-helpers.ts` - Shared auth helpers: parseHashParams(), checkOnboardingReady(), routeAfterAuth()
 - `client/src/lib/catalogSeed.ts` - Centralized catalog seeding (ensureCatalogSeeded) called during auth bootstrap
