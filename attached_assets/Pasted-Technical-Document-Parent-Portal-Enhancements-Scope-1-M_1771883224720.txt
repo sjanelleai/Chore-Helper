@@ -1,0 +1,213 @@
+Technical Document: Parent Portal Enhancements
+
+Scope: (1) Make Rewards/Store editable in Parent Portal like Chores. (2) Remove “Parent Portal” entry from Home page; Parent Portal is accessible only via a dedicated navigation tab.
+
+⸻
+
+1) Objectives
+	1.	Store Editor (Rewards Management)
+
+	•	Parents can view, search, filter by category
+	•	Parents can add/edit/archive rewards
+	•	Parents can adjust title, category, cost, active, and (if supported) requires_parent_approval
+	•	Avoid breaking history: prefer archive (active=false) over hard delete
+
+	2.	Navigation / Home Page
+
+	•	Remove Parent Portal card/button from Home page
+	•	Parent Portal remains accessible via a dedicated tab in the persistent navigation
+	•	In kid mode, the Parent tab remains hidden (existing behavior)
+
+⸻
+
+2) Assumptions / Dependencies
+	•	Supabase tables exist:
+	•	reward_catalog(family_id, category, title, cost, active, sort_order, …)
+	•	chore_catalog(...) already editable
+	•	RLS permits parent users (family members) to read/write reward_catalog for their family
+	•	Existing app has:
+	•	“Parent Zone” / ParentPanel route (e.g., /parent)
+	•	Persistent navigation component (bottom tabs on mobile, sidebar on desktop)
+	•	Kid/Parent mode logic
+
+If requires_parent_approval column exists, include it in edit UI; otherwise ignore.
+
+⸻
+
+3) Data Model Contract (Frontend)
+
+RewardCatalogItem
+
+type RewardCatalogItem = {
+  id: string;
+  family_id: string;
+  category: string;
+  title: string;
+  cost: number;
+  active: boolean;
+  sort_order?: number | null;
+  requires_parent_approval?: boolean | null; // optional depending on schema
+};
+
+
+⸻
+
+4) UX / UI Requirements
+
+4.1 Parent Portal layout
+
+Inside Parent Portal, add tabs or sections:
+	•	Chores
+	•	Rewards (Store)
+	•	(existing sections remain: settings, approvals inbox, verification settings, etc.)
+
+4.2 Rewards Editor behaviors
+
+List View
+	•	Category filter (dropdown)
+	•	Search input (title contains)
+	•	Sort: category → sort_order → title
+	•	Each row:
+	•	Title
+	•	Cost
+	•	Active toggle (archive/unarchive)
+	•	“Edit” button
+	•	Optional “Duplicate” (nice-to-have)
+
+Add Reward
+	•	Button: “Add Reward”
+	•	Modal or inline form:
+	•	Title (required)
+	•	Category (required; allow new category text)
+	•	Cost (required; integer)
+	•	Active (default true)
+	•	Optional requires_parent_approval
+
+Edit Reward
+	•	Edit title/category/cost/active/(requires_parent_approval)
+	•	Save writes to Supabase
+
+Archive instead of Delete
+	•	“Remove” action sets active=false (do not delete rows)
+
+⸻
+
+5) Frontend Implementation
+
+5.1 New hooks in use-data.ts
+
+Add a set of reward management hooks mirroring chore management patterns.
+
+useRewardCatalog()
+	•	Query:
+	•	select * from reward_catalog where family_id = <familyId>
+	•	Filter client-side for active/inactive depending on screen needs
+	•	Cache key: ["reward_catalog", familyId]
+
+useCreateReward()
+
+Insert into reward_catalog:
+	•	family_id
+	•	title
+	•	category
+	•	cost
+	•	active=true
+	•	sort_order optional
+
+useUpdateReward()
+
+Update by id for editable fields.
+
+useArchiveReward()
+
+Update active=false by id (and allow unarchive with active=true).
+
+Cache invalidation
+
+After any create/update/archive:
+	•	invalidate ["reward_catalog", familyId]
+	•	invalidate any “store” queries used in kid/parent store views
+
+⸻
+
+5.2 Parent Portal UI components
+
+Create new component:
+	•	RewardsManagementSection
+
+Placement:
+	•	Next to or below existing chore management section, or as a tabbed sub-nav.
+
+Responsibilities:
+	•	Fetch rewards via useRewardCatalog()
+	•	Render filters/search
+	•	Render list rows and edit controls
+	•	Implement add/edit/archive flows
+	•	Show success/error toasts
+
+⸻
+
+5.3 Update Store/Rewards screen (kid + parent)
+
+If your store page currently reads rewards from Supabase:
+	•	Ensure it reads from reward_catalog
+	•	Ensure it filters out inactive items (active=true)
+	•	Keep kid mode behavior unchanged (no editing controls)
+
+⸻
+
+6) Navigation / Home Page change
+
+6.1 Remove Parent Portal entry from Home page
+	•	Identify the Home page component that renders “Parent Portal” access.
+	•	Remove that card/button/section entirely.
+
+6.2 Parent Portal remains a dedicated tab
+	•	Persistent nav includes a “Parent” tab:
+	•	Visible only when mode === "parent"
+	•	Hidden when mode === "kid" (keep existing logic)
+	•	Clicking tab routes to /parent (or your existing ParentPanel route)
+
+⸻
+
+7) Permissions & Security Expectations
+	•	Only parent-auth users can modify reward catalog:
+	•	RLS should enforce is_family_member(family_id)
+	•	Kid mode should have no direct table writes to reward_catalog
+	•	Archive instead of delete prevents “Unknown reward” issues in history/redemption logs
+
+⸻
+
+8) Acceptance Criteria
+	1.	Parent can edit rewards:
+
+	•	Add a new reward → appears in store
+	•	Edit cost/title/category → updates immediately
+	•	Archive reward → disappears from kid store view but remains in DB
+
+	2.	Rewards editor UX parity:
+
+	•	Similar editing experience to chores editor (list + edit + add + active toggle)
+
+	3.	Home page:
+
+	•	No Parent Portal entry on home page
+	•	Parent Portal accessible only via Parent tab
+
+	4.	Kid mode:
+
+	•	No parent tab visible
+	•	Kid can still view store and redeem rewards (subject to approval rules)
+
+⸻
+
+9) Implementation Checklist (Developer)
+	•	Add reward catalog hooks (list/create/update/archive)
+	•	Add RewardsManagementSection to Parent Portal
+	•	Ensure Store view filters active=true
+	•	Remove Parent Portal entry from Home page
+	•	Confirm Parent tab is the only entry point for Parent Portal
+	•	Add query invalidations after reward edits
+	•	QA: add/edit/archive reward; verify kid store updates
+
+⸻
