@@ -1,0 +1,93 @@
+What you described is the right Phase 1 implementation shape: pending vs approved is the truth, and points only move on approved. The two things that matter now are (1) making sure the DB and frontend are aligned on the exact column meanings, and (2) making sure there’s no path that double-writes the ledger.
+
+Here’s the tight “done/verify” checklist to hand to your team.
+
+⸻
+
+1) Database is the source of truth
+
+Daily status truth
+	•	daily_status_v2.status drives UI state:
+	•	pending → yellow “Waiting for parent”
+	•	approved → green approved
+	•	Do not rely on daily_status_v2.completed for business logic if you can avoid it. If it exists, treat it as legacy/compat only.
+
+Points truth
+	•	Points must be written to points_ledger only when:
+	•	a chore is inserted as approved, or
+	•	a pending chore is transitioned to approved by a parent approval RPC.
+
+⸻
+
+2) RPC rules that must be true
+
+kid_toggle_chore
+	•	If approval required → insert row status='pending', no ledger write
+	•	If no approval required → insert row status='approved', ledger +points
+	•	If row exists and status is pending → kid can undo pending (delete row), no ledger write
+	•	If row exists and status is approved → kid cannot undo in Phase 1 (or it returns a clear error)
+
+parent_approve_chore
+	•	Only operates on rows where status='pending'
+	•	Updates to approved, sets verified_by/verified_at
+	•	Writes ledger exactly once
+	•	Must be idempotent against double-click:
+	•	if already approved → return ok without writing again
+
+parent_reject_chore
+	•	Deletes the pending row (Phase 1)
+	•	No ledger write
+
+toggle_chore (parent direct completion)
+	•	Parent action should always land in approved state and ledger reflects it.
+
+⸻
+
+3) UI behavior that must be true
+	•	Progress counters count only approved
+	•	Pending doesn’t count as done, doesn’t award points
+	•	Parent inbox shows all pending chores grouped by child
+	•	Approve → turns green + points change immediately
+	•	Reject → removes pending and returns to not done
+
+⸻
+
+4) Cache invalidation that must happen
+
+After any of these:
+	•	kid toggle
+	•	parent approve
+	•	parent reject
+Invalidate/refetch:
+	•	today’s daily_status_v2 for affected child
+	•	points totals (today + all-time if shown)
+	•	pending approvals list
+	•	parent daily summary widget
+
+If you miss one of these invalidations, you’ll see “it worked but UI didn’t update” bugs.
+
+⸻
+
+5) Quick sanity SQL checks (after v8 is deployed)
+
+Run these after testing one pending + one approved:
+
+-- pending rows exist
+select status, count(*)
+from public.daily_status_v2
+group by status;
+
+-- ledger only contains entries for approved actions
+select event_type, count(*), sum(points_delta)
+from public.points_ledger
+group by event_type
+order by event_type desc;
+
+Expected:
+	•	You should see pending rows in daily_status_v2.
+	•	You should not see any ledger rows for pending-only actions.
+	•	Approvals generate a ledger row (e.g., chore_approve) exactly once.
+
+⸻
+
+If your team runs through the above and it matches, Phase 1 is genuinely complete and you’ll stop the “spam click” problem without breaking points accuracy.
