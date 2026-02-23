@@ -1,0 +1,204 @@
+Good. Here’s the Phase 1 plan rewritten as a developer handoff, with the key adjustments that will prevent “gotchas” in Chore Helper (kid token model + points ledger + timezone + existing daily_status_v2 use).
+
+I’m keeping it implementation-focused and assuming your DB developer will create migration v8 separately. No SQL here.
+
+⸻
+
+Phase 1 Handoff: Chore Verification (Never / Always / Smart)
+
+Objective
+
+Kids can tap chores, but points only post when allowed by verification rules. Parent has an inbox to approve pending chores.
+
+Outcomes
+	•	Prevent “spam click for points”
+	•	Preserve kid momentum (Smart mode default)
+	•	Keep points accurate everywhere (ledger remains source of truth)
+
+⸻
+
+1) Data model expectations (DB v8 contract)
+
+Frontend will assume these fields exist:
+
+family_settings
+	•	approval_mode enum/text: never | always | smart
+	•	approval_threshold int (default 30)
+
+chore_catalog
+	•	approval_override enum/text: inherit | always | never
+(Phase 1 can ignore overrides in UI if you want; DB can still include it.)
+
+daily_status_v2
+
+Add columns:
+	•	status enum/text: pending | approved (default approved for backwards compatibility)
+	•	verified_by uuid nullable (parent auth user id)
+	•	verified_at timestamptz nullable
+
+Important: Keep the primary key (child_id, chore_id, date_key).
+
+⸻
+
+2) Approval decision logic (single canonical rule)
+
+When a kid completes a chore, compute required approval like this:
+
+if family_settings.approval_mode == "never" -> approved immediately
+if == "always" -> pending
+if == "smart"  -> pending iff chore.points >= approval_threshold
+then apply chore_catalog.approval_override if not "inherit":
+  override "always" -> pending
+  override "never"  -> approved
+
+Phase 1 minimum: implement approval_mode + threshold. Overrides can be wired later.
+
+⸻
+
+3) RPC/API contracts (frontend uses these)
+
+A) Kid action: kid_toggle_chore(...)
+
+Behavior
+	•	If chore not done:
+	•	Insert daily_status_v2 row with:
+	•	status = pending if approval required
+	•	status = approved if not required
+	•	Ledger write rules:
+	•	If status=approved: write points to points_ledger
+	•	If status=pending: NO ledger write
+	•	If chore already exists:
+	•	If status=pending: allow kid to undo pending (delete row)
+	•	If status=approved: Phase 1 recommendation: allow undo only if approval_mode == never (otherwise parent should manage). If you want simplest: disallow undo for approved in kid mode.
+
+Return
+
+{ "ok": true, "status": "pending" | "approved" }
+
+B) Parent inbox: get_pending_approvals(p_family_id, p_date_key)
+
+Returns all pending chores for the day with enough data to render the inbox:
+	•	child_id, child_name
+	•	chore_id, chore_title, points
+	•	date_key, created_at
+
+C) Parent decisions
+	•	parent_approve_chore(p_child_id, p_chore_id, p_date_key)
+	•	changes row to approved
+	•	writes ledger +points once
+	•	sets verified_by + verified_at
+	•	parent_reject_chore(p_child_id, p_chore_id, p_date_key)
+	•	deletes row (or sets rejected; phase 1 can delete)
+
+Both return { ok:true }
+
+Approve all can be implemented client-side by calling approve per row (fine for MVP).
+
+⸻
+
+4) Frontend UX requirements
+
+A) Chore list shows 3 states
+
+For each chore on the kid checklist:
+	•	Not done: empty checkbox
+	•	Pending: yellow badge “Waiting for parent”
+	•	Approved: green check
+
+Kid tapping:
+	•	If Pending required -> becomes Pending (no points change)
+	•	If not required -> becomes Approved (points change)
+
+B) Parent panel adds two sections
+
+1) Verification Settings
+
+UI:
+	•	Radio:
+	•	Never verify
+	•	Always verify
+	•	Smart verify (default)
+	•	Threshold input (only visible for Smart):
+	•	“Require approval for chores worth ≥ [30] points”
+	•	Save writes to family_settings.
+
+2) Pending Approvals Inbox
+	•	Group by child
+	•	Each row has:
+	•	chore title + points
+	•	Approve button
+	•	Reject button
+	•	Optional: Approve all
+
+⸻
+
+5) Data hooks (what changes in app code)
+
+Replace the existing completion query assumptions
+
+Today you likely treat daily_status_v2 “row exists means completed”. After Phase 1:
+	•	Completed means: status == 'approved'
+	•	Pending rows exist but should not count as completed in “done list” and should not affect points totals.
+
+So:
+	•	useDailyStatus / completion reads must filter:
+	•	status = 'approved' for completed
+	•	status = 'pending' for pending list
+
+Cache invalidation rules
+
+After any of these:
+	•	kid toggles chore
+	•	parent approves/rejects
+Invalidate/refetch:
+	•	daily_status_v2 for that child/day
+	•	points summary for that child/day
+	•	pending approvals inbox list
+	•	family summary (if displayed in parent panel)
+
+This ensures no “stale pending” confusion.
+
+⸻
+
+6) Points integrity (no drift)
+
+Points shown in UI/email should remain ledger-based:
+	•	Pending does not write ledger
+	•	Approved writes ledger exactly once
+	•	Reject does not write ledger
+
+This prevents both:
+	•	kids spamming points
+	•	parent inbox actions double-counting points
+
+⸻
+
+7) Backwards compatibility + rollout
+
+During rollout, you may already have daily_status_v2 rows without status. Requirements:
+	•	Treat NULL status as approved in queries (or DB default).
+	•	No mass backfill needed for phase 1 as long as default is applied.
+
+⸻
+
+8) QA checklist (must pass)
+	1.	Smart mode, threshold 30:
+
+	•	10-point chore → kid marks → approved + points increase
+	•	50-point chore → kid marks → pending + no points
+	•	parent approves → points increase once
+
+	2.	Always mode:
+
+	•	all kid marks become pending; no points until parent approves
+
+	3.	Never mode:
+
+	•	all kid marks become approved; points increase immediately
+
+	4.	Pending items do not appear as “done” in kid’s completed list (they appear as pending).
+	5.	Parent portal PIN still blocks access to approvals/settings.
+
+⸻
+
+If your frontend dev follows this exactly and your DB dev implements v8 to match these contracts, you’ll eliminate the “click without doing” loophole without killing the kid UX.

@@ -1,0 +1,184 @@
+Implementation spec: Chore Verification (Never / Always / Smart) + High-value approvals
+
+Goal
+
+Kids can mark chores as done, but points are only awarded when allowed by verification rules:
+	•	Never: points award immediately
+	•	Always: all kid completions are pending until a parent approves
+	•	Smart (default): only high-value chores require approval (plus per-chore overrides)
+
+⸻
+
+1) Parent Portal settings (UI + behavior)
+
+Add a “Verification” section with:
+
+A) Approval mode (radio)
+	•	Never verify (auto-award)
+	•	Always verify (all chores pending)
+	•	Smart verify (only high-value chores pending)
+
+Default: Smart
+
+B) Smart threshold
+	•	“Require approval for chores worth ≥ ___ points”
+Default: 30 (tune later)
+
+C) Per-chore override (in chore catalog editor)
+
+Each chore gets a dropdown:
+	•	Inherit from mode
+	•	Always require approval
+	•	Never require approval
+
+⸻
+
+2) Kid UX (no extra friction)
+
+On the checklist, each chore has 3 states:
+	•	Not done
+	•	Pending (kid checked, awaiting parent)
+	•	Approved (done + points awarded)
+
+When kid taps a chore:
+	•	If approval not required → instantly becomes Approved and points update
+	•	If approval required → becomes Pending and points do not update
+
+⸻
+
+3) Parent UX (fast approvals)
+
+Parent Zone gets a “Pending approvals” inbox:
+	•	grouped by child
+	•	shows chore title, points, timestamp
+Actions:
+	•	Approve (awards points)
+	•	Reject (clears pending)
+Optional:
+	•	“Approve all” for a child
+
+⸻
+
+4) Data model (Supabase) — what needs to exist
+
+SQL placeholders only (you’ll have DB dev do the actual migration)
+
+A) family_settings
+	•	approval_mode text (never|always|smart)
+	•	approval_threshold int (e.g., 30)
+
+B) chore_catalog
+	•	approval_override text (inherit|always|never) OR requires_approval boolean + override handling
+
+C) daily_status_v2 (or new table)
+
+Option 1 (recommended): extend daily_status_v2
+	•	add status text (pending|approved)
+	•	add verified_by uuid null (parent auth user id)
+	•	add verified_at timestamptz null
+
+Primary key stays (child_id, chore_id, date_key).
+
+⸻
+
+5) Points ledger rules (no drift)
+
+Points are written only when status changes:
+
+When kid marks chore complete
+	•	If goes to approved → write +points ledger entry (event_type chore_complete)
+	•	If goes to pending → no ledger write
+
+When parent approves
+	•	Transition pending → approved
+	•	Write +points ledger entry (event_type chore_approve)
+
+If parent rejects
+	•	Transition pending → not present (delete row) OR keep row with status rejected
+	•	No ledger write
+
+If parent “unapproves” later (optional)
+	•	Write -points ledger entry and set back to pending/not done
+
+⸻
+
+6) API/RPC behavior (frontend contract)
+
+Keep kid actions and parent actions separate.
+
+Kid RPC
+
+kid_toggle_chore(...) must become:
+	•	if chore already pending/approved:
+	•	if status = pending → allow kid to “undo pending” (remove pending)
+	•	if status = approved → either prevent undo or allow undo based on a parent setting
+	•	if not done:
+	•	evaluate approval rule
+	•	insert row as pending or approved
+	•	only write ledger if approved
+
+Returns:
+
+{ "ok": true, "status": "pending" | "approved" }
+
+Parent RPC
+
+parent_approve_chore(child_id, chore_id, date_key)
+	•	verifies parent membership
+	•	requires row status pending
+	•	updates to approved + writes ledger
+Returns:
+
+{ "ok": true }
+
+parent_reject_chore(child_id, chore_id, date_key)
+	•	deletes pending row (or sets rejected)
+Returns:
+
+{ "ok": true }
+
+
+⸻
+
+7) Frontend wiring (what dev changes)
+
+A) Chore list rendering
+	•	show status badge:
+	•	Pending = yellow “Waiting for parent”
+	•	Approved = green check
+	•	points display for the day should always read from ledger, so it won’t drift
+
+B) Parent Zone
+	•	new Pending Approvals component:
+	•	query pending rows for family (via parent RPC or direct select if RLS allows)
+	•	approve/reject buttons call parent RPCs
+	•	after action: refetch pending + points + summary
+
+C) Settings
+	•	store approval mode + threshold in family_settings
+	•	chore-level override in chore_catalog editor (optional first iteration)
+
+⸻
+
+8) Rollout order (safe)
+
+Phase 1 (fastest, high impact)
+	•	approval_mode + threshold in family_settings
+	•	daily_status_v2 status pending/approved
+	•	kid_toggle_chore respects Smart threshold
+	•	Parent Pending inbox approve/reject
+	•	points only awarded on approved
+
+Phase 2
+	•	per-chore override UI and column
+	•	optional “kid can undo pending” toggle
+	•	“approve all” UX
+
+⸻
+
+Acceptance criteria
+	•	In Smart mode, a 50-point chore becomes Pending when kid checks it; points do not change.
+	•	Parent approves → points increase exactly once and match email summary + UI everywhere.
+	•	In Never mode, kid checks and points increase immediately.
+	•	In Always mode, every kid completion is Pending until approved.
+	•	No scenario allows spam-clicking to inflate points without parent approval.
