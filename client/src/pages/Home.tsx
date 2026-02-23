@@ -1,46 +1,9 @@
 import { Link } from "wouter";
-import { useResetChores } from "@/hooks/use-data";
 import { useModeChores } from "@/hooks/use-mode-data";
 import { useAuth } from "@/lib/auth-context";
 import { PointsDisplay } from "@/components/PointsDisplay";
 import { motion } from "framer-motion";
-import { CheckSquare, ShoppingBag, RotateCcw, Users, LogOut } from "lucide-react";
-
-function ParentZone() {
-  const resetMutation = useResetChores();
-  const { clearChild } = useAuth();
-
-  return (
-    <div className="border-t pt-8 mt-8">
-      <p className="text-xs text-center text-muted-foreground uppercase tracking-widest font-bold mb-4">
-        Parent Zone
-      </p>
-      <div className="space-y-3">
-        <button
-          onClick={() => resetMutation.mutate()}
-          disabled={resetMutation.isPending}
-          className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-muted-foreground/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors font-medium text-sm"
-          data-testid="button-reset-chores"
-        >
-          {resetMutation.isPending ? (
-            <RotateCcw className="w-4 h-4 animate-spin" />
-          ) : (
-            <RotateCcw className="w-4 h-4" />
-          )}
-          Reset chores for tomorrow
-        </button>
-        <button
-          onClick={clearChild}
-          className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-muted-foreground/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors font-medium text-sm"
-          data-testid="button-switch-child"
-        >
-          <Users className="w-4 h-4" />
-          Switch Player
-        </button>
-      </div>
-    </div>
-  );
-}
+import { CheckSquare, ShoppingBag, LogOut } from "lucide-react";
 
 export default function Home() {
   const { data: chores } = useModeChores();
@@ -131,7 +94,7 @@ export default function Home() {
           </p>
         </motion.div>
 
-        {mode === "kid" ? (
+        {mode === "kid" && (
           <div className="border-t pt-8 mt-8">
             <div className="space-y-3">
               <button
@@ -144,8 +107,6 @@ export default function Home() {
               </button>
             </div>
           </div>
-        ) : (
-          <ParentZone />
         )}
       </div>
     </div>
