@@ -311,6 +311,14 @@ export default function Login() {
             Create one
           </Link>
         </p>
+
+        <div className="mt-4 pt-4 border-t border-border">
+          <Link href="/join" data-testid="link-kid-join">
+            <Button variant="outline" className="w-full text-accent font-bold" type="button">
+              I'm a Kid — Join a Family
+            </Button>
+          </Link>
+        </div>
       </div>
     </div>
   );

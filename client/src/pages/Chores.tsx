@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useChores, useToggleChore } from "@/hooks/use-data";
+import { useModeChores, useModeToggleChore } from "@/hooks/use-mode-data";
 import { ChoreCard } from "@/components/ChoreCard";
 import { Header } from "@/components/Header";
 import { Sparkles, AlertTriangle, RefreshCw } from "lucide-react";
@@ -8,8 +8,8 @@ import { useAuth } from "@/lib/auth-context";
 
 export default function Chores() {
   const { catalogSeedError, retryCatalogSeed } = useAuth();
-  const { data: chores, isLoading } = useChores();
-  const toggleMutation = useToggleChore();
+  const { data: chores, isLoading } = useModeChores();
+  const toggleMutation = useModeToggleChore();
   const [filter, setFilter] = useState('all');
   const [retrying, setRetrying] = useState(false);
 

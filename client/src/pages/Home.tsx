@@ -1,16 +1,58 @@
 import { Link } from "wouter";
-import { useUserState, useChores, useResetChores } from "@/hooks/use-data";
+import { useResetChores } from "@/hooks/use-data";
+import { useModeChores } from "@/hooks/use-mode-data";
 import { useAuth } from "@/lib/auth-context";
 import { PointsDisplay } from "@/components/PointsDisplay";
 import { motion } from "framer-motion";
-import { CheckSquare, ShoppingBag, RotateCcw, Shield, Users } from "lucide-react";
+import { CheckSquare, ShoppingBag, RotateCcw, Shield, Users, LogOut } from "lucide-react";
+
+function ParentZone() {
+  const resetMutation = useResetChores();
+  const { clearChild } = useAuth();
+
+  return (
+    <div className="border-t pt-8 mt-8">
+      <p className="text-xs text-center text-muted-foreground uppercase tracking-widest font-bold mb-4">
+        Parent Zone
+      </p>
+      <div className="space-y-3">
+        <button
+          onClick={() => resetMutation.mutate()}
+          disabled={resetMutation.isPending}
+          className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-muted-foreground/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors font-medium text-sm"
+          data-testid="button-reset-chores"
+        >
+          {resetMutation.isPending ? (
+            <RotateCcw className="w-4 h-4 animate-spin" />
+          ) : (
+            <RotateCcw className="w-4 h-4" />
+          )}
+          Reset chores for tomorrow
+        </button>
+        <Link href="/parent">
+          <div className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-primary/30 text-primary hover:bg-primary/5 transition-colors font-medium text-sm cursor-pointer" data-testid="link-parent-panel">
+            <Shield className="w-4 h-4" />
+            Open Parent Panel
+          </div>
+        </Link>
+        <button
+          onClick={clearChild}
+          className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-muted-foreground/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors font-medium text-sm"
+          data-testid="button-switch-child"
+        >
+          <Users className="w-4 h-4" />
+          Switch Player
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function Home() {
-  const { data: user } = useUserState();
-  const { data: chores } = useChores();
-  const resetMutation = useResetChores();
-  const { activeChild, clearChild } = useAuth();
+  const { data: chores } = useModeChores();
+  const { activeChild, mode, kidSession, kidSignOut } = useAuth();
 
+  const childName = mode === "kid" ? kidSession?.childName : activeChild?.displayName;
   const pendingChores = chores?.filter(c => !c.completed).length || 0;
 
   const container = {
@@ -29,7 +71,7 @@ export default function Home() {
         <div className="flex items-center justify-between gap-2 mb-8 flex-wrap">
           <div>
             <h1 className="text-3xl font-display font-bold text-foreground" data-testid="text-greeting">
-              Hi, {activeChild?.displayName || "Champion"}!
+              Hi, {childName || "Champion"}!
             </h1>
             <p className="text-muted-foreground font-medium">Ready to earn some points?</p>
           </div>
@@ -95,40 +137,22 @@ export default function Home() {
           </p>
         </motion.div>
 
-        <div className="border-t pt-8 mt-8">
-          <p className="text-xs text-center text-muted-foreground uppercase tracking-widest font-bold mb-4">
-            Parent Zone
-          </p>
-          <div className="space-y-3">
-            <button
-              onClick={() => resetMutation.mutate()}
-              disabled={resetMutation.isPending}
-              className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-muted-foreground/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors font-medium text-sm"
-              data-testid="button-reset-chores"
-            >
-              {resetMutation.isPending ? (
-                <RotateCcw className="w-4 h-4 animate-spin" />
-              ) : (
-                <RotateCcw className="w-4 h-4" />
-              )}
-              Reset chores for tomorrow
-            </button>
-            <Link href="/parent">
-              <div className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-primary/30 text-primary hover:bg-primary/5 transition-colors font-medium text-sm cursor-pointer" data-testid="link-parent-panel">
-                <Shield className="w-4 h-4" />
-                Open Parent Panel
-              </div>
-            </Link>
-            <button
-              onClick={clearChild}
-              className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-muted-foreground/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors font-medium text-sm"
-              data-testid="button-switch-child"
-            >
-              <Users className="w-4 h-4" />
-              Switch Player
-            </button>
+        {mode === "kid" ? (
+          <div className="border-t pt-8 mt-8">
+            <div className="space-y-3">
+              <button
+                onClick={kidSignOut}
+                className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-muted-foreground/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors font-medium text-sm"
+                data-testid="button-kid-sign-out"
+              >
+                <LogOut className="w-4 h-4" />
+                Sign Out
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <ParentZone />
+        )}
       </div>
     </div>
   );

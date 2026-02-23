@@ -1,8 +1,8 @@
-import { useBadges, usePurchases } from "@/hooks/use-data";
+import { useModeBadges, useModeRedemptions } from "@/hooks/use-mode-data";
 import { Header } from "@/components/Header";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { Medal, Star, Trophy, Crown, History, Lock } from "lucide-react";
+import { Medal, Star, Trophy, Crown, History } from "lucide-react";
 
 const BADGE_ICONS: Record<string, typeof Medal> = {
   medal_bronze: Medal,
@@ -23,10 +23,10 @@ const BADGE_COLORS: Record<string, string> = {
 };
 
 export default function Badges() {
-  const { data: badges } = useBadges();
-  const { data: purchases } = usePurchases();
+  const { data: badges } = useModeBadges();
+  const { data: purchases } = useModeRedemptions();
 
-  const earnedBadges = badges?.filter(b => b.earned) || [];
+  const earnedBadges = badges?.filter((b: any) => b.earned) || [];
 
   return (
     <div className="min-h-screen bg-background">
@@ -46,7 +46,7 @@ export default function Badges() {
           </div>
           
           <div className="grid grid-cols-3 gap-3">
-            {badges?.map((badge) => {
+            {badges?.map((badge: any) => {
               const IconComponent = BADGE_ICONS[badge.icon] || Star;
               const colorClass = BADGE_COLORS[badge.icon] || "text-accent";
 
@@ -101,7 +101,7 @@ export default function Badges() {
             </div>
           ) : (
             <div className="space-y-3">
-              {purchases?.map((purchase) => (
+              {purchases?.map((purchase: any) => (
                 <div key={purchase.id} className="flex items-center justify-between gap-2 p-4 bg-card border rounded-xl shadow-sm">
                   <div className="min-w-0">
                     <p className="font-bold text-foreground truncate">{purchase.reward_title}</p>

@@ -1,10 +1,10 @@
-import { useUserState } from "@/hooks/use-data";
+import { useModeChildPoints } from "@/hooks/use-mode-data";
 import { motion, AnimatePresence } from "framer-motion";
 import { Coins } from "lucide-react";
 
 export function PointsDisplay({ compact = false }: { compact?: boolean }) {
-  const { data: user } = useUserState();
-  const points = user?.totalPoints || 0;
+  const { data: pts } = useModeChildPoints();
+  const points = pts?.points || 0;
 
   if (compact) {
     return (

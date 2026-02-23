@@ -1,9 +1,11 @@
+import { useState, useEffect } from "react";
 import { Switch, Route, Redirect, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
+import { supabase } from "@/lib/supabase";
 import { AppLayout } from "@/components/Navigation";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
@@ -17,10 +19,12 @@ import SelectChild from "@/pages/SelectChild";
 import AuthCallback from "@/pages/AuthCallback";
 import ResetPassword from "@/pages/ResetPassword";
 import AcceptInvite from "@/pages/AcceptInvite";
+import KidJoin from "@/pages/KidJoin";
+import ParentUnlock from "@/pages/ParentUnlock";
 import { Loader2 } from "lucide-react";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { session, loading } = useAuth();
+  const { session, loading, mode } = useAuth();
   const [location] = useLocation();
 
   if (loading) {
@@ -31,22 +35,96 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const publicRoutes = ["/login", "/signup", "/auth/callback", "/reset-password", "/accept-invite"];
-  if (!session) {
+  const publicRoutes = ["/login", "/signup", "/auth/callback", "/reset-password", "/accept-invite", "/join"];
+  if (mode === "guest") {
     if (!publicRoutes.some(r => location.startsWith(r))) {
       return <Redirect to="/login" />;
     }
+  }
+
+  if (mode === "parent" && (location === "/login" || location === "/signup" || location === "/join")) {
+    return <Redirect to="/" />;
+  }
+  if (mode === "kid" && (location === "/login" || location === "/signup" || location === "/join")) {
+    return <Redirect to="/" />;
   }
 
   return <>{children}</>;
 }
 
 function ChildGuard({ children }: { children: React.ReactNode }) {
-  const { activeChildId, session } = useAuth();
+  const { activeChildId, session, mode, kidSession } = useAuth();
+
+  if (mode === "kid") {
+    if (!kidSession?.childId) return <Redirect to="/join" />;
+    return <>{children}</>;
+  }
 
   if (!session) return <Redirect to="/login" />;
   if (!activeChildId) return <Redirect to="/select-child" />;
 
+  return <>{children}</>;
+}
+
+function ParentGuard({ children }: { children: React.ReactNode }) {
+  const { mode, family } = useAuth();
+  const [checking, setChecking] = useState(true);
+  const [needsPin, setNeedsPin] = useState(false);
+
+  useEffect(() => {
+    if (mode !== "parent" || !family?.familyId) {
+      setChecking(false);
+      return;
+    }
+
+    const unlockUntil = sessionStorage.getItem("parentPortalUnlockedUntil");
+    if (unlockUntil && Date.now() < Number(unlockUntil)) {
+      setChecking(false);
+      return;
+    }
+
+    supabase
+      .from("family_settings")
+      .select("parent_portal_pin_hash")
+      .eq("family_id", family.familyId)
+      .single()
+      .then(({ data, error }) => {
+        if (error) {
+          setNeedsPin(true);
+          setChecking(false);
+          return;
+        }
+        if (data?.parent_portal_pin_hash) {
+          setNeedsPin(true);
+        }
+        setChecking(false);
+      })
+      .catch(() => {
+        setNeedsPin(true);
+        setChecking(false);
+      });
+  }, [mode, family?.familyId]);
+
+  if (mode === "kid") return <Redirect to="/" />;
+  if (mode === "guest") return <Redirect to="/login" />;
+
+  if (checking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (needsPin) return <Redirect to="/parent/unlock?next=/parent" />;
+
+  return <>{children}</>;
+}
+
+function ParentOnlyGuard({ children }: { children: React.ReactNode }) {
+  const { mode } = useAuth();
+  if (mode === "kid") return <Redirect to="/" />;
+  if (mode === "guest") return <Redirect to="/login" />;
   return <>{children}</>;
 }
 
@@ -59,6 +137,7 @@ function Router() {
         <Route path="/auth/callback" component={AuthCallback} />
         <Route path="/reset-password" component={ResetPassword} />
         <Route path="/accept-invite" component={AcceptInvite} />
+        <Route path="/join" component={KidJoin} />
         <Route path="/select-child" component={SelectChild} />
         <Route path="/">
           <ChildGuard><AppLayout><Home /></AppLayout></ChildGuard>
@@ -72,8 +151,11 @@ function Router() {
         <Route path="/badges">
           <ChildGuard><AppLayout><Badges /></AppLayout></ChildGuard>
         </Route>
+        <Route path="/parent/unlock">
+          <ParentOnlyGuard><ParentUnlock /></ParentOnlyGuard>
+        </Route>
         <Route path="/parent">
-          <AppLayout><ParentPanel /></AppLayout>
+          <ParentGuard><AppLayout><ParentPanel /></AppLayout></ParentGuard>
         </Route>
         <Route component={NotFound} />
       </Switch>

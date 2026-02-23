@@ -2,6 +2,7 @@ import { Link, useLocation } from "wouter";
 import { CheckSquare, Star, ShoppingBag, LayoutDashboard, Shield } from "lucide-react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
 import {
   SidebarProvider,
   Sidebar,
@@ -15,21 +16,24 @@ import {
   SidebarHeader,
 } from "@/components/ui/sidebar";
 
-const NAV_ITEMS = [
-  { href: "/", icon: LayoutDashboard, label: "Home" },
-  { href: "/chores", icon: CheckSquare, label: "Chores" },
-  { href: "/rewards", icon: ShoppingBag, label: "Store" },
-  { href: "/badges", icon: Star, label: "Badges" },
-  { href: "/parent", icon: Shield, label: "Parent" },
+const ALL_NAV_ITEMS = [
+  { href: "/", icon: LayoutDashboard, label: "Home", parentOnly: false },
+  { href: "/chores", icon: CheckSquare, label: "Chores", parentOnly: false },
+  { href: "/rewards", icon: ShoppingBag, label: "Store", parentOnly: false },
+  { href: "/badges", icon: Star, label: "Badges", parentOnly: false },
+  { href: "/parent", icon: Shield, label: "Parent", parentOnly: true },
 ];
 
 function MobileNav() {
   const [location] = useLocation();
+  const { mode } = useAuth();
+
+  const items = ALL_NAV_ITEMS.filter(i => !i.parentOnly || mode === "parent");
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-lg border-t border-border pb-safe md:hidden" data-testid="nav-bottom">
       <div className="max-w-md mx-auto px-2 h-16 flex items-center justify-around">
-        {NAV_ITEMS.map(({ href, icon: Icon, label }) => {
+        {items.map(({ href, icon: Icon, label }) => {
           const isActive = location === href;
           return (
             <Link key={href} href={href} className="relative flex flex-col items-center justify-center w-14 h-full group" data-testid={`nav-link-${label.toLowerCase()}`}>
@@ -59,6 +63,9 @@ function MobileNav() {
 
 function DesktopSidebar() {
   const [location] = useLocation();
+  const { mode } = useAuth();
+
+  const items = ALL_NAV_ITEMS.filter(i => !i.parentOnly || mode === "parent");
 
   return (
     <Sidebar collapsible="none" data-testid="nav-sidebar">
@@ -70,7 +77,7 @@ function DesktopSidebar() {
           <SidebarGroupLabel>Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV_ITEMS.map(({ href, icon: Icon, label }) => {
+              {items.map(({ href, icon: Icon, label }) => {
                 const isActive = location === href;
                 return (
                   <SidebarMenuItem key={href}>

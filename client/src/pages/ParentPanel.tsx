@@ -17,7 +17,7 @@ import {
   Mail, Settings, Star,
   ChevronDown, ChevronUp, Loader2,
   CheckSquare, ShoppingBag, UserPlus, LogOut, Users,
-  Clock, Globe, Zap, Trash2,
+  Clock, Globe, Zap, Trash2, Copy, Check, Key, Shield,
 } from "lucide-react";
 
 function BonusSection() {
@@ -796,6 +796,346 @@ function ChildManagementSection() {
   );
 }
 
+function FamilyNumberSection() {
+  const { family } = useAuth();
+  const [familyNumber, setFamilyNumber] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!family?.familyId) return;
+    supabase
+      .from("families")
+      .select("family_number")
+      .eq("id", family.familyId)
+      .single()
+      .then(({ data }) => {
+        setFamilyNumber(data?.family_number || null);
+        setLoading(false);
+      });
+  }, [family?.familyId]);
+
+  const handleCopy = () => {
+    if (!familyNumber) return;
+    navigator.clipboard.writeText(familyNumber);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (loading) return null;
+
+  return (
+    <Card className="p-5">
+      <h3 className="font-display font-bold text-lg mb-2 flex items-center gap-2">
+        <Key className="w-5 h-5 text-accent" />
+        Kid Access
+      </h3>
+      <p className="text-sm text-muted-foreground mb-4">
+        Share this Family Number with your kids so they can join from any device.
+      </p>
+
+      <div className="flex items-center gap-3">
+        <div className="flex-1 bg-muted/50 border-2 border-dashed border-primary/30 rounded-xl p-4 text-center">
+          <p className="text-xs text-muted-foreground font-bold uppercase tracking-wider mb-1">Family Number</p>
+          <p className="text-3xl font-black font-mono tracking-[0.3em] text-foreground" data-testid="text-family-number">
+            {familyNumber || "N/A"}
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleCopy}
+          disabled={!familyNumber}
+          data-testid="button-copy-family-number"
+        >
+          {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground mt-3">
+        Kids also need a PIN set below to join. They'll go to the "I'm a Kid" option on the login page.
+      </p>
+    </Card>
+  );
+}
+
+function ChildPinSection() {
+  const { children: kids, family, refreshChildren } = useAuth();
+  const { toast } = useToast();
+  const [editingChildId, setEditingChildId] = useState<string | null>(null);
+  const [pinInput, setPinInput] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const handleSetPin = async (childId: string) => {
+    if (pinInput.length !== 4) {
+      toast({ title: "PIN must be 4 digits", variant: "destructive" });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const { data, error } = await supabase.rpc("set_child_pin", {
+        p_child_id: childId,
+        p_pin: pinInput,
+      });
+      if (error) throw error;
+      const result = typeof data === "string" ? JSON.parse(data) : data;
+      if (!result?.ok) throw new Error(result?.error || "Failed to set PIN");
+
+      toast({ title: "PIN set!", description: "Child can now use this PIN to join." });
+      setPinInput("");
+      setEditingChildId(null);
+      await refreshChildren();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!kids.length) return null;
+
+  return (
+    <Card className="p-5">
+      <h3 className="font-display font-bold text-lg mb-2 flex items-center gap-2">
+        <Key className="w-5 h-5 text-primary" />
+        Child PINs
+      </h3>
+      <p className="text-sm text-muted-foreground mb-4">
+        Each child needs a 4-digit PIN to sign in on kid mode.
+      </p>
+
+      <div className="space-y-3">
+        {kids.map(kid => (
+          <div key={kid.id} className="border rounded-xl p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm shrink-0">
+                  {kid.displayName.charAt(0).toUpperCase()}
+                </div>
+                <p className="font-bold text-foreground truncate">{kid.displayName}</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {kid.hasPin && (
+                  <span className="text-xs font-bold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-2 py-1 rounded-full">
+                    PIN set
+                  </span>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setEditingChildId(editingChildId === kid.id ? null : kid.id);
+                    setPinInput("");
+                  }}
+                  data-testid={`button-edit-pin-${kid.displayName}`}
+                >
+                  {kid.hasPin ? "Change" : "Set PIN"}
+                </Button>
+              </div>
+            </div>
+
+            {editingChildId === kid.id && (
+              <div className="mt-3 flex gap-2">
+                <input
+                  type="password"
+                  value={pinInput}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+                    setPinInput(v);
+                  }}
+                  inputMode="numeric"
+                  maxLength={4}
+                  placeholder="4-digit PIN"
+                  className="flex-1 p-2 rounded-lg border bg-background text-foreground font-mono text-lg tracking-widest text-center"
+                  data-testid={`input-pin-${kid.displayName}`}
+                />
+                <Button
+                  onClick={() => handleSetPin(kid.id)}
+                  disabled={saving || pinInput.length !== 4}
+                  size="sm"
+                  data-testid={`button-save-pin-${kid.displayName}`}
+                >
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
+                </Button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function ParentPortalPinSection() {
+  const { family } = useAuth();
+  const { toast } = useToast();
+  const [hasPin, setHasPin] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [pinInput, setPinInput] = useState("");
+  const [confirmPinInput, setConfirmPinInput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+
+  useEffect(() => {
+    if (!family?.familyId) return;
+    supabase
+      .from("family_settings")
+      .select("parent_portal_pin_hash")
+      .eq("family_id", family.familyId)
+      .single()
+      .then(({ data }) => {
+        setHasPin(!!data?.parent_portal_pin_hash);
+        setLoading(false);
+      });
+  }, [family?.familyId]);
+
+  const handleSetPin = async () => {
+    if (pinInput.length < 4) {
+      toast({ title: "PIN must be at least 4 digits", variant: "destructive" });
+      return;
+    }
+    if (pinInput !== confirmPinInput) {
+      toast({ title: "PINs don't match", variant: "destructive" });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const { data, error } = await supabase.rpc("set_parent_portal_pin", {
+        p_family_id: family!.familyId,
+        p_pin: pinInput,
+      });
+      if (error) throw error;
+      const result = typeof data === "string" ? JSON.parse(data) : data;
+      if (!result?.ok) throw new Error(result?.error || "Failed to set PIN");
+
+      setHasPin(true);
+      toast({ title: "Parent Portal PIN set!", description: "The parent panel now requires a PIN." });
+      setPinInput("");
+      setConfirmPinInput("");
+      setShowForm(false);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDisablePin = async () => {
+    setSaving(true);
+    try {
+      const { data, error } = await supabase.rpc("disable_parent_portal_pin", {
+        p_family_id: family!.familyId,
+      });
+      if (error) throw error;
+      const result = typeof data === "string" ? JSON.parse(data) : data;
+      if (!result?.ok) throw new Error(result?.error || "Failed to disable PIN");
+
+      setHasPin(false);
+      sessionStorage.removeItem("parentPortalUnlockedUntil");
+      toast({ title: "Parent Portal PIN disabled" });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+
+  return (
+    <Card className="p-5">
+      <h3 className="font-display font-bold text-lg mb-2 flex items-center gap-2">
+        <Shield className="w-5 h-5 text-primary" />
+        Parent Portal PIN
+      </h3>
+      <p className="text-sm text-muted-foreground mb-4">
+        {hasPin
+          ? "Your parent panel is PIN-protected. Kids on shared devices can't access it without the PIN."
+          : "Add a PIN to protect the Parent Panel from being accessed by kids on shared devices."
+        }
+      </p>
+
+      {hasPin ? (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-green-600 dark:text-green-400">
+            <Check className="w-4 h-4" />
+            <span className="text-sm font-bold">PIN is active</span>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowForm(!showForm)}
+              className="flex-1"
+              data-testid="button-change-portal-pin"
+            >
+              Change PIN
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleDisablePin}
+              disabled={saving}
+              className="text-destructive"
+              data-testid="button-disable-portal-pin"
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Disable"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          variant="outline"
+          onClick={() => setShowForm(!showForm)}
+          className="w-full"
+          data-testid="button-enable-portal-pin"
+        >
+          <Shield className="w-4 h-4 mr-2" />
+          Set Parent Portal PIN
+        </Button>
+      )}
+
+      {showForm && (
+        <div className="mt-4 space-y-3 border-t pt-4">
+          <input
+            type="password"
+            value={pinInput}
+            onChange={(e) => {
+              const v = e.target.value.replace(/\D/g, "").slice(0, 6);
+              setPinInput(v);
+            }}
+            inputMode="numeric"
+            maxLength={6}
+            placeholder="New PIN (4-6 digits)"
+            className="w-full p-3 rounded-xl border bg-background text-foreground font-mono text-lg tracking-widest text-center"
+            data-testid="input-new-portal-pin"
+          />
+          <input
+            type="password"
+            value={confirmPinInput}
+            onChange={(e) => {
+              const v = e.target.value.replace(/\D/g, "").slice(0, 6);
+              setConfirmPinInput(v);
+            }}
+            inputMode="numeric"
+            maxLength={6}
+            placeholder="Confirm PIN"
+            className="w-full p-3 rounded-xl border bg-background text-foreground font-mono text-lg tracking-widest text-center"
+            data-testid="input-confirm-portal-pin"
+          />
+          <Button
+            onClick={handleSetPin}
+            disabled={saving || pinInput.length < 4 || pinInput !== confirmPinInput}
+            className="w-full"
+            data-testid="button-save-portal-pin"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save PIN"}
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function ParentPanel() {
   const { activeChild } = useAuth();
 
@@ -810,12 +1150,15 @@ export default function ParentPanel() {
             <p className="font-bold text-lg text-foreground" data-testid="text-active-child-name">{activeChild.displayName}</p>
           </div>
         )}
+        <FamilyNumberSection />
         <ChildManagementSection />
+        <ChildPinSection />
         <BonusSection />
         <ChoreConfigSection />
         <RewardConfigSection />
         <SummarySection />
         <SettingsSection />
+        <ParentPortalPinSection />
       </div>
     </div>
   );

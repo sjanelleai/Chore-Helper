@@ -3,6 +3,7 @@ import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import { ensureCatalogSeeded } from "./catalogSeed";
 import { queryClient } from "./queryClient";
+import { loadKidSession, clearKidSession, type KidSession, type AppMode } from "./kid-session";
 
 interface FamilyProfile {
   familyId: string;
@@ -34,6 +35,10 @@ interface AuthContextType {
   clearChild: () => void;
   refreshChildren: () => Promise<void>;
   refreshFamily: () => Promise<void>;
+  mode: AppMode;
+  kidSession: KidSession | null;
+  setKidSession: (s: KidSession | null) => void;
+  kidSignOut: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -49,6 +54,18 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [catalogSeedError, setCatalogSeedError] = useState<string | null>(null);
+  const [kidSessionState, setKidSessionState] = useState<KidSession | null>(loadKidSession);
+
+  const mode: AppMode = session ? "parent" : kidSessionState ? "kid" : "guest";
+
+  const setKidSessionHandler = useCallback((s: KidSession | null) => {
+    setKidSessionState(s);
+  }, []);
+
+  const kidSignOut = useCallback(() => {
+    clearKidSession();
+    setKidSessionState(null);
+  }, []);
 
   const seedCatalogForFamily = useCallback(async (familyId: string) => {
     try {
@@ -83,7 +100,7 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
           id: k.id,
           displayName: k.display_name || "Child",
           avatar: k.avatar ?? null,
-          hasPin: !!(k.pin_hash),
+          hasPin: !!(k.child_pin_hash || k.pin_hash),
         }))
       );
     }
@@ -181,6 +198,10 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
       setSession(s);
       setUser(s?.user ?? null);
       if (s?.user) {
+        if (kidSessionState) {
+          clearKidSession();
+          setKidSessionState(null);
+        }
         loadFamilyData(s.user.id).finally(() => setLoading(false));
       } else {
         setLoading(false);
@@ -234,6 +255,8 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
     await supabase.auth.signOut();
     setActiveChildId(null);
     localStorage.removeItem("activeChildId");
+    clearKidSession();
+    setKidSessionState(null);
   };
 
   const selectChild = (childId: string) => {
@@ -280,6 +303,10 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
         clearChild,
         refreshChildren,
         refreshFamily,
+        mode,
+        kidSession: kidSessionState,
+        setKidSession: setKidSessionHandler,
+        kidSignOut,
       }}
     >
       {childrenNodes}
