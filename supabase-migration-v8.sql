@@ -298,6 +298,10 @@ begin
     return json_build_object('ok', false, 'error', 'No pending chore found');
   end if;
 
+  if v_current_status = 'approved' then
+    return json_build_object('ok', true);
+  end if;
+
   if v_current_status != 'pending' then
     return json_build_object('ok', false, 'error', 'Chore is not pending');
   end if;
