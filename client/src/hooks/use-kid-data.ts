@@ -87,16 +87,17 @@ export function useKidChildPoints() {
 export function useKidChores() {
   const kidToken = useKidToken();
   const childId = useKidChildId();
+  const { kidSession } = useAuth();
   const { data: catalog } = useKidChoreCatalog();
+  const today = localDateKey(new Date());
 
   return useQuery<EnabledChore[]>({
-    queryKey: ["kid_chores", childId, catalog?.length],
+    queryKey: ["kid_chores", kidSession?.familyId, childId, today],
     enabled: !!kidToken && !!childId && !!catalog && catalog.length > 0,
     queryFn: async () => {
       if (!catalog || !childId) return [];
 
       const activeChores = catalog.filter(c => c.active);
-      const today = localDateKey(new Date());
 
       const { data, error } = await supabase.rpc("kid_get_chore_status", {
         p_kid_token: kidToken!,
@@ -132,6 +133,7 @@ export function useKidToggleChore() {
   const { toast } = useToast();
   const kidToken = useKidToken();
   const childId = useKidChildId();
+  const { kidSession } = useAuth();
   const { data: catalog } = useKidChoreCatalog();
 
   return useMutation({
@@ -160,8 +162,9 @@ export function useKidToggleChore() {
       };
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["kid_chores"] });
-      queryClient.invalidateQueries({ queryKey: ["kid_child_points"] });
+      const today = localDateKey(new Date());
+      queryClient.invalidateQueries({ queryKey: ["kid_chores", kidSession?.familyId, childId, today] });
+      queryClient.invalidateQueries({ queryKey: ["kid_child_points", childId] });
       queryClient.invalidateQueries({ queryKey: ["kid_badges"] });
 
       if (data.status === "approved") {

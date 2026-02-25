@@ -1272,23 +1272,24 @@ function VerificationSection() {
   const { data: settings } = useFamilySettings();
   const updateSettings = useUpdateSettings();
   const [mode, setMode] = useState<string>("smart");
-  const [threshold, setThreshold] = useState(30);
+  const [thresholdStr, setThresholdStr] = useState("30");
 
   useEffect(() => {
     if (settings) {
       setMode(settings.approval_mode || "smart");
-      setThreshold(settings.approval_threshold ?? 30);
+      setThresholdStr(String(settings.approval_threshold ?? 30));
     }
   }, [settings?.approval_mode, settings?.approval_threshold]);
 
   const handleSave = () => {
+    const threshold = Math.min(999, Math.max(1, parseInt(thresholdStr, 10) || 30));
     updateSettings.mutate({
       approvalMode: mode,
       approvalThreshold: threshold,
     });
   };
 
-  const hasChanges = settings && (mode !== (settings.approval_mode || "smart") || threshold !== (settings.approval_threshold ?? 30));
+  const hasChanges = settings && (mode !== (settings.approval_mode || "smart") || Number(thresholdStr) !== (settings.approval_threshold ?? 30));
 
   return (
     <Card className="p-5">
@@ -1343,11 +1344,11 @@ function VerificationSection() {
           </p>
           <div className="flex items-center gap-2">
             <input
-              type="number"
-              min={1}
-              max={999}
-              value={threshold}
-              onChange={(e) => setThreshold(Math.max(1, parseInt(e.target.value) || 1))}
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={thresholdStr}
+              onChange={(e) => setThresholdStr(e.target.value.replace(/[^0-9]/g, ""))}
               className="w-24 p-2 rounded-lg border bg-background text-foreground text-center font-mono font-bold"
               data-testid="input-approval-threshold"
             />

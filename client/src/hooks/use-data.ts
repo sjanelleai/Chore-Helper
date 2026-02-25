@@ -162,17 +162,17 @@ export function useChildPoints() {
 }
 
 export function useChores() {
-  const { activeChildId } = useAuth();
+  const { activeChildId, family } = useAuth();
   const { data: catalog } = useChoreCatalog();
+  const today = localDateKey(new Date());
 
   return useQuery<EnabledChore[]>({
-    queryKey: ["chores", activeChildId, catalog?.length],
-    enabled: !!activeChildId && !!catalog && catalog.length > 0,
+    queryKey: ["chores", family?.familyId, activeChildId, today],
+    enabled: !!activeChildId && !!family?.familyId && !!catalog && catalog.length > 0,
     queryFn: async () => {
       if (!catalog || !activeChildId) return [];
 
       const activeChores = catalog.filter(c => c.active);
-      const today = localDateKey(new Date());
 
       const { data: dailyRows } = await supabase
         .from("daily_status_v2")
@@ -205,7 +205,7 @@ export function useChores() {
 export function useToggleChore() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { activeChildId } = useAuth();
+  const { activeChildId, family } = useAuth();
   const { data: catalog } = useChoreCatalog();
 
   return useMutation({
@@ -232,8 +232,9 @@ export function useToggleChore() {
       };
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["chores"] });
-      queryClient.invalidateQueries({ queryKey: ["child_points"] });
+      const today = localDateKey(new Date());
+      queryClient.invalidateQueries({ queryKey: ["chores", family?.familyId, activeChildId, today] });
+      queryClient.invalidateQueries({ queryKey: ["child_points", activeChildId] });
       queryClient.invalidateQueries({ queryKey: ["badges"] });
       queryClient.invalidateQueries({ queryKey: ["ledger"] });
       queryClient.invalidateQueries({ queryKey: ["family_summary"] });

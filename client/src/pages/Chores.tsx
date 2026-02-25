@@ -20,7 +20,7 @@ export default function Chores() {
   );
 
   const statusOrder = { unchecked: 0, pending: 1, approved: 2 };
-  filteredChores?.sort((a, b) => (statusOrder[a.status] || 0) - (statusOrder[b.status] || 0));
+  filteredChores?.sort((a, b) => (statusOrder[a.status] || 0) - (statusOrder[b.status] || 0) || a.id.localeCompare(b.id));
 
   return (
     <div className="min-h-screen bg-background">
