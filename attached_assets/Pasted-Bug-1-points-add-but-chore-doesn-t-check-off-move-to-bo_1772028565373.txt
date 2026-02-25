@@ -1,0 +1,69 @@
+Bug 1: points add, but chore doesn’t “check off” / move to bottom
+
+This is almost always frontend state not updating from the new DB truth.
+
+With the verification system, a chore is “done” only when:
+	•	daily_status_v2.status = 'approved' (parent mode), or
+	•	status = 'pending' (kid mode, if approval required)
+
+So the UI must re-render based on status, not a local completed boolean.
+
+Fix direction (frontend):
+	1.	In the chore list item model, define:
+
+	•	isApproved = status === 'approved'
+	•	isPending = status === 'pending'
+
+	2.	Your “checked” styling + moving to bottom should be based on:
+
+	•	Approved chores only (green check) → go to bottom
+	•	Pending chores (yellow) → sit in the middle group (not bottom)
+
+	3.	After toggling a chore, you must invalidate/refetch the chores query for that child/date.
+
+What to tell the developer to change (concrete):
+	•	In useToggleChore / useKidToggleChore onSuccess:
+	•	invalidate ["chores", childId, dateKey] (or whatever your actual key is)
+	•	also invalidate ["points", childId] if you show points in the header
+	•	In the Chores list render:
+	•	replace any chore.completed logic with chore.status
+	•	In the sort:
+	•	group order must be: not done → pending → approved
+
+If the app is currently doing “optimistic UI” by toggling a local completed=true, that will be wrong now. The UI needs to follow the returned status and/or the refetched data.
+
+⸻
+
+Bug 2: approval threshold won’t change
+
+This is almost always one of these:
+	1.	The input is controlled, but the state never updates (value bound to prop, missing onChange)
+	2.	The save mutation is writing the wrong column name/type
+	3.	The input is disabled because the mode check thinks it’s not in “Smart verify”
+
+Fix direction (frontend):
+	•	Ensure the threshold input is:
+	•	editable when approval_mode === 'smart'
+	•	value is stored in local component state (string), then parsed to int on save
+
+Concrete expectations:
+	•	On load:
+	•	approval_threshold comes from family_settings.approval_threshold
+	•	set local state: setThreshold(String(approval_threshold ?? 30))
+	•	On change:
+	•	setThreshold(e.target.value)
+	•	On save:
+	•	send approval_threshold: Number(threshold) (clamp min 1, max 999)
+	•	confirm the update hook writes to family_settings.approval_threshold
+
+If your DB column is integer but you’re sending text, PostgREST can reject or ignore it depending on how the update is structured—so the save might “succeed” but not change anything.
+
+⸻
+
+The fastest way to confirm both fixes
+
+After toggling one chore, the useChores() data returned should show a row for that chore/date with status='approved' or pending'. If it does, the bug is 100% UI logic/sorting/refetch.
+
+After saving threshold, re-fetch family_settings and confirm approval_threshold updated.
+
+If you want, paste the useChores return shape + the VerificationSettings component code (just those parts), and I’ll tell you exactly which lines to change.

@@ -1,0 +1,107 @@
+Your write-up is solid and (importantly) it’s aimed at the real failure modes we see in React Query + “enabled” queries + controlled inputs.
+
+Here are the only adjustments I’d make before you hand it to your dev, so it’s tighter and less likely to introduce new behavior.
+
+⸻
+
+Adjustments to T001 (Bug 1)
+
+1) Don’t add a “pending” toast to parent toggle
+
+In your system, parent toggle should never yield pending. Parent actions are either:
+	•	create approved immediately, or
+	•	remove the row (uncheck)
+
+So a “pending” toast in parent mode is either dead code or masks a real bug. Keep “pending” toast for kid toggle only.
+
+Replace that line with:
+	•	Parent toggle toast should reflect the returned status:
+	•	approved → “+X points earned”
+	•	unchecked → “-X points removed” (if you show it)
+	•	error → show error
+
+2) Fix the real root cause: remove catalog?.length from query keys
+
+This is the biggest improvement and it’s deterministic.
+
+Using catalog?.length in the key creates a new “identity” for the chores query every time catalog changes, and can cause:
+	•	invalidation missing the active key
+	•	refetch blocked by enabled momentarily
+	•	flicker / stale list that looks “not checked”
+
+Change query keys from:
+	•	["chores", activeChildId, catalog?.length]
+
+To:
+	•	["chores", familyId, activeChildId, dateKey] (or similar)
+	•	and keep catalog as a dependency via enabled only, not in the key.
+
+This one change often makes the visual reorder bug disappear without adding refetch hacks.
+
+3) Prefer queryClient.invalidateQueries({ queryKey: [...] }) with the full key
+
+Instead of invalidateQueries({ queryKey: ["chores"] }), do:
+	•	invalidate the exact key you use (chores + points)
+
+If your key includes dateKey, include it.
+
+4) Stable sort is good—but make sure the key is stable too
+
+Add the tie breaker (id/title). That’s correct.
+
+⸻
+
+Adjustments to T002 (Bug 2)
+
+You nailed it. The only additional detail to add:
+
+1) Use inputMode="numeric" + pattern="[0-9]*" (mobile UX)
+
+This avoids the iOS keyboard being annoying and reduces bad input.
+
+2) Parse on blur OR save (either is fine)
+
+String state is the right approach. I’d parse on save only.
+
+⸻
+
+Revised task list (drop-in replacement)
+
+T001: Fix Bug 1 — Chore toggle doesn’t visually update
+
+Files: client/src/hooks/use-data.ts, client/src/hooks/use-kid-data.ts, client/src/pages/Chores.tsx
+
+Changes:
+	•	Remove catalog?.length from chores query keys. Keys should be stable and based on identifiers: familyId + childId + dateKey.
+	•	Keep enabled: !!catalog && catalog.length > 0 if you must, but do not bake catalog length into the key.
+	•	In toggle mutations, invalidate exact queries using the full key:
+	•	chores key for that child/day
+	•	points key for that child
+	•	Keep “pending” toast only for kid mode (not parent mode).
+	•	Add stable tiebreaker to sort (id/title) to keep ordering consistent.
+
+Acceptance:
+	•	Toggling a chore updates UI immediately after mutation: pending/approved state displays correctly and item reorders into the correct section.
+
+⸻
+
+T002: Fix Bug 2 — Approval threshold input doesn’t save properly
+
+Files: client/src/pages/ParentPanel.tsx
+
+Changes:
+	•	Store threshold as a string (thresholdStr) in local state.
+	•	Input uses value={thresholdStr} and onChange={setThresholdStr(e.target.value)}.
+	•	On save: parse/clamp:
+	•	const threshold = clamp(parseInt(thresholdStr, 10) || 30, 1, 999)
+	•	Update hasChanges comparison to Number(thresholdStr) vs DB value.
+	•	Add inputMode="numeric" and pattern="[0-9]*".
+
+Acceptance:
+	•	Parent can delete and retype a threshold naturally.
+	•	Save persists after refresh.
+	•	Save button enables only when value differs.
+
+⸻
+
+If you paste your actual query keys (the exact array shapes for chores + points) I’ll rewrite the invalidation lines precisely so your dev can copy/paste without thinking.
