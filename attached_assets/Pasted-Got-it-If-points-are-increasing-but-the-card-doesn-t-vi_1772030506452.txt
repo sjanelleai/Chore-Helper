@@ -1,0 +1,111 @@
+Got it. If points are increasing but the card doesn’t visually change or reorder, that means the toggle RPC is writing + points ledger, but the UI is not seeing the corresponding daily_status_v2 row for that date/child (or not mapping it into chore.status).
+
+There are only two realistic root causes:
+	1.	Date key mismatch (most common): toggle writes to one date_key, the chores query reads another.
+	2.	Cache/mapping mismatch: the daily_status_v2 rows are fetched, but your useChores() mapping doesn’t apply them to each chore’s status, so everything stays “unchecked” visually.
+
+Below is the fastest way to isolate + fix it.
+
+⸻
+
+Step 1: Confirm whether daily_status_v2 rows are being written
+
+Right after you check off a chore in the app, run this in Supabase SQL Editor:
+
+select child_id, chore_id, date_key, status, verified_at, created_at
+from public.daily_status_v2
+order by created_at desc
+limit 20;
+
+Interpretation
+	•	If you see a new row with status = 'approved' or 'pending': backend write is fine → your issue is frontend query/mapping/caching.
+	•	If you do not see a new row: your toggle RPC isn’t writing daily_status_v2 (or is writing to a different child/date) → but since points are being added, this usually means date_key mismatch (writing a date_key you aren’t expecting or reading).
+
+⸻
+
+Step 2: Fix the #1 culprit — date_key mismatch
+
+This breaks the UI exactly the way you describe: points move, but the “checked” indicator never appears because the “done” row is stored under a different date_key.
+
+Rule
+
+The same exact date_key must be used everywhere:
+	•	the toggle call
+	•	the daily_status_v2 select query
+	•	the “today summary”
+	•	the reorder logic
+
+Concrete fix
+
+In your frontend, compute dateKey once and reuse it:
+
+function localDateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`; // YYYY-MM-DD
+}
+
+Then ensure:
+	•	toggle_chore(..., dateKey)
+	•	select from daily_status_v2 where date_key = dateKey
+
+If you’re currently using toISOString().slice(0,10) anywhere, that is UTC and will drift.
+
+⸻
+
+Step 3: Fix mapping so the UI actually uses status
+
+Even if rows exist, your UI can still stay “unchecked” if mapping is wrong.
+
+In useChores() (and kid equivalent), make sure you build a lookup map:
+
+const statusByChoreId = new Map(statusRows.map(r => [r.chore_id, r.status]));
+
+// for each chore in catalog
+const status = statusByChoreId.get(chore.id) ?? "unchecked";
+return {
+  ...chore,
+  status,
+  // convenience booleans
+  isApproved: status === "approved",
+  isPending: status === "pending",
+};
+
+Then in ChoreCard, the checkmark and styling must be based on status, not completed.
+
+⸻
+
+Step 4: Make it feel instant — update cache optimistically on success
+
+Even with perfect invalidation, you’ll always get a slight delay. The best UX is to update the cached query immediately after toggle returns.
+
+In useToggleChore().onSuccess:
+
+queryClient.setQueryData(CHORES_KEY, (old: EnabledChore[] | undefined) => {
+  if (!old) return old;
+  return old.map(c =>
+    c.id === p_chore_id
+      ? { ...c, status: data.completed ? "approved" : "unchecked" }
+      : c
+  );
+});
+
+For kid toggle in smart/always verify, set "pending" when appropriate based on returned status.
+
+⸻
+
+Step 5: Reorder logic must be based on status
+
+Your sort should look like:
+
+const rank = { unchecked: 0, pending: 1, approved: 2 } as const;
+chores.sort((a, b) => (rank[a.status] - rank[b.status]) || a.title.localeCompare(b.title));
+
+
+⸻
+
+What I’d do first (fastest)
+
+Run the daily_status_v2 query after a toggle.
+	•	If rows exist
