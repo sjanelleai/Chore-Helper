@@ -161,9 +161,20 @@ export function useKidToggleChore() {
         chorePoints: chore?.points || 0,
       };
     },
-    onSuccess: (data) => {
+    onSuccess: (data, choreId) => {
       const today = localDateKey(new Date());
-      queryClient.invalidateQueries({ queryKey: ["kid_chores", kidSession?.familyId, childId, today] });
+      const choresKey = ["kid_chores", kidSession?.familyId, childId, today];
+
+      queryClient.setQueryData<EnabledChore[]>(choresKey, (old) => {
+        if (!old) return old;
+        return old.map(c =>
+          c.id === choreId
+            ? { ...c, status: data.status as EnabledChore["status"], completed: data.status === "approved" }
+            : c
+        );
+      });
+
+      queryClient.invalidateQueries({ queryKey: choresKey });
       queryClient.invalidateQueries({ queryKey: ["kid_child_points", childId] });
       queryClient.invalidateQueries({ queryKey: ["kid_badges"] });
 
