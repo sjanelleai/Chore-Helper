@@ -1,0 +1,141 @@
+You’re now in the “best possible” state to fix this cleanly: catalog is showing, points are updating, but status isn’t being reflected in UI. That means the UI is still not reliably deriving “done for today” from the DB source of truth.
+
+Here’s the future-proof, once-and-for-all approach to tell your developer.
+
+⸻
+
+The “Once and for all” fix (frontend contract)
+
+Principle
+
+The chore list UI must be a pure function of:
+	1.	chore_catalog (what chores exist + points)
+	2.	daily_status_v2 rows for (child_id, date_key) (what’s done/pending today)
+
+No local booleans, no “toggle state” stored in component state, no reliance on mutation return as truth.
+
+⸻
+
+Step 1 — Lock in ONE canonical dateKey
+
+Make a single utility used everywhere:
+
+export function localDateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`; // local YYYY-MM-DD
+}
+
+Do not use toISOString().slice(0,10) anywhere.
+
+Use this same dateKey for:
+	•	the status query
+	•	the toggle RPC argument
+	•	progress counters
+	•	daily email summary logic (if it’s computed in frontend)
+
+⸻
+
+Step 2 — Make useChores() return status-driven items
+
+This must be the core mapping:
+
+const dateKey = localDateKey();
+const statusRows = await supabase
+  .from("daily_status_v2")
+  .select("chore_id,status")
+  .eq("child_id", childId)
+  .eq("date_key", dateKey);
+
+const statusById = new Map(statusRows.data?.map(r => [r.chore_id, r.status]) ?? []);
+
+const chores = catalog.map(chore => {
+  const status = statusById.get(chore.id) ?? "unchecked";
+  return {
+    ...chore,
+    status,
+    isApproved: status === "approved",
+    isPending: status === "pending",
+  };
+});
+
+Important: do not derive status from points_ledger. Ledger is balance/earned, not “done list”.
+
+⸻
+
+Step 3 — Sort by status every render (stable)
+
+const rank = { unchecked: 0, pending: 1, approved: 2 } as const;
+
+chores.sort((a, b) =>
+  (rank[a.status] - rank[b.status]) ||
+  a.title.localeCompare(b.title) ||
+  a.id.localeCompare(b.id)
+);
+
+This guarantees “checked off goes to bottom” always.
+
+⸻
+
+Step 4 — After toggle, force the ONE query to refresh
+
+No guesswork. After toggle_chore succeeds:
+	•	update cache optimistically (instant UX)
+	•	then invalidate the exact chores query key
+
+Example:
+
+const choresKey = ["chores", familyId, childId, dateKey];
+
+onSuccess: (resp) => {
+  queryClient.setQueryData(choresKey, (old) => {
+    if (!old) return old;
+    return old.map(c =>
+      c.id === choreId ? { ...c, status: resp.status ?? (resp.completed ? "approved" : "unchecked") } : c
+    );
+  });
+
+  queryClient.invalidateQueries({ queryKey: choresKey });
+}
+
+Do not use unstable keys (catalog length, etc.).
+Do not rely on prefix invalidation only.
+
+⸻
+
+Step 5 — Add one “truth check” log (dev only)
+
+For future debugging, add a dev-only log when a chore is toggled:
+	•	log childId, choreId, dateKey
+	•	then after refetch, log the returned statusRows count
+
+This catches dateKey mismatches and silent policy errors in seconds.
+
+⸻
+
+The likely reason it still isn’t working right now
+
+Even though chores appear again, your daily_status_v2 read is probably returning zero rows for today due to one of:
+	•	wrong dateKey being used in the query (UTC vs local)
+	•	the toggle RPC writing to daily_status_v2 but using a different dateKey than the UI query
+	•	status mapping not applied correctly (still using completed boolean somewhere)
+
+The above steps eliminate all three.
+
+⸻
+
+What to ask your developer to prove in QA (1 minute)
+
+After checking one chore, run this query in Supabase and confirm it shows a row with today’s date:
+
+select child_id, chore_id, date_key, status, created_at
+from public.daily_status_v2
+order by created_at desc
+limit 10;
+
+If the row exists and the UI still doesn’t move it, it’s 100% mapping/sort/query-key issue.
+
+⸻
+
+If you want, paste your current useChores() query key + the daily_status_v2 select block, and I’ll rewrite the exact fixed version with your real variable names in one shot.
