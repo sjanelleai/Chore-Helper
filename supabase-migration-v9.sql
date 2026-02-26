@@ -32,4 +32,7 @@ using (
 -- 3) Grant SELECT to authenticated role (PostgREST needs this even with RLS)
 grant select on public.daily_status_v2 to authenticated;
 
+-- 4) Ensure authenticated can read children table (needed by RLS policy join)
+grant select on public.children to authenticated;
+
 commit;

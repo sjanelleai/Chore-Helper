@@ -182,14 +182,12 @@ export function useChores() {
 
       if (dailyErr) {
         console.error("daily_status_v2 select failed", dailyErr);
-        throw dailyErr;
       }
 
+      const safeRows = dailyRows ?? [];
       const statusMap = new Map<string, string>();
-      if (dailyRows) {
-        for (const row of dailyRows) {
-          statusMap.set(row.chore_id, row.status || "approved");
-        }
+      for (const row of safeRows) {
+        statusMap.set(row.chore_id, row.status || "approved");
       }
 
       return activeChores.map(c => {
