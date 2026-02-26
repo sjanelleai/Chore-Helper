@@ -1,0 +1,79 @@
+That makes sense with the change you just made.
+
+Why chores disappeared
+
+Your useChores() hook now throws if the daily_status_v2 SELECT fails. Many UIs treat a React Query “error state” as “render nothing”, so you end up with no chores at all, even though the catalog exists.
+
+So right now you’ve traded:
+	•	“chores show but don’t cross off” ✅
+for
+	•	“no chores show if status read fails” ❌
+
+You need both:
+	1.	fix the DB so the status SELECT works, and
+	2.	make the UI fail-soft (still show chores even if status read fails).
+
+⸻
+
+What to tell your developer to do (two concrete fixes)
+
+Fix A (frontend): fail-soft so chores always render
+
+In useChores() (parent mode), do not throw on daily_status_v2 read failure. Instead:
+	•	log the error
+	•	treat dailyRows = []
+	•	still return the catalog (all “unchecked”)
+	•	optionally show a small banner/toast “Status sync unavailable”
+
+Exact pattern:
+
+const { data: dailyRows, error: dailyErr } = await supabase
+  .from("daily_status_v2")
+  .select("chore_id,status")
+  .eq("child_id", childId)
+  .eq("date_key", dateKey);
+
+if (dailyErr) {
+  console.error("daily_status_v2 select failed", dailyErr);
+  // FAIL-SOFT: continue with empty rows so chores still display
+}
+const safeRows = dailyRows ?? [];
+
+Then build your statusByChoreId map from safeRows.
+
+Do the same in kid mode only if kid mode also reads PostgREST (many kid flows use RPCs).
+
+This ensures: chores always show up, even if status fetching is broken.
+
+⸻
+
+Fix B (Supabase): make sure status read actually works
+
+You ran the RLS migration, but one more thing commonly blocks it:
+
+1) daily_status_v2 might be readable, but the policy depends on reading children
+
+Your policy does:
+
+from public.children c
+where c.id = daily_status_v2.child_id
+  and is_family_member(c.family_id)
+
+If authenticated lacks SELECT privileges on children (or RLS prevents it), that EXISTS can fail in practice.
+
+Run this (safe):
+
+grant select on public.children to authenticated;
+
+Also confirm children has a SELECT policy that lets family members read rows.
+
+⸻
+
+The minimal “done” acceptance criteria
+
+After these two changes:
+	•	chores always render
+	•	after checking a chore, it crosses off + reorders (because status can now be read)
+	•	daily reset still works (because date_key-based)
+
+If you want the fastest confirmation without digging logs: after you apply Fix B, the UI should immediately start crossing off again even without optimistic updates.
