@@ -174,11 +174,16 @@ export function useChores() {
 
       const activeChores = catalog.filter(c => c.active);
 
-      const { data: dailyRows } = await supabase
+      const { data: dailyRows, error: dailyErr } = await supabase
         .from("daily_status_v2")
         .select("chore_id, completed, status")
         .eq("child_id", activeChildId)
         .eq("date_key", today);
+
+      if (dailyErr) {
+        console.error("daily_status_v2 select failed", dailyErr);
+        throw dailyErr;
+      }
 
       const statusMap = new Map<string, string>();
       if (dailyRows) {
