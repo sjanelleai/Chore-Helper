@@ -1,0 +1,92 @@
+Your diagnosis is on target. What you need to tell your developer is:
+
+Root cause
+
+Parent mode reads daily_status_v2 directly via PostgREST and silently ignores errors.
+If that SELECT is being blocked (RLS / permissions / schema mismatch), dailyRows becomes null, the UI maps everything to "unchecked", and the refetch overwrites your optimistic update—so the chore never stays crossed off / reordered even though points were awarded.
+
+⸻
+
+Fix (do these two things)
+
+1) Frontend: stop swallowing the daily_status query error
+
+In useChores() (and any parent-mode chore status fetch), change:
+
+const { data: dailyRows } = await supabase
+  .from("daily_status_v2")
+  .select(...)
+
+to:
+
+const { data: dailyRows, error: dailyErr } = await supabase
+  .from("daily_status_v2")
+  .select("child_id,chore_id,date_key,status") // whatever you use
+  .eq("child_id", childId)
+  .eq("date_key", dateKey);
+
+if (dailyErr) {
+  console.error("daily_status_v2 select failed", dailyErr);
+  throw dailyErr; // IMPORTANT: do not return null rows
+}
+
+Why: if the query fails, you want the UI to surface the error and keep the optimistic state temporarily—not silently “reset” everything to unchecked.
+
+Also: in your query function, if you don’t want to throw, then at minimum:
+	•	return cached/previous chore list if the status fetch fails
+	•	never map null dailyRows to unchecked.
+
+⸻
+
+2) Supabase: ensure parent users are allowed to SELECT daily_status_v2
+
+Even if the RPC writes bypass RLS (SECURITY DEFINER), the UI read path does not. So daily_status_v2 must be readable for authenticated parents.
+
+Have your dev run these checks:
+
+A) Confirm policies exist
+
+select tablename, policyname, cmd
+from pg_policies
+where schemaname='public'
+  and tablename='daily_status_v2'
+order by policyname;
+
+You should see a SELECT policy.
+
+B) If missing or wrong, apply a safe SELECT policy
+
+Copy/paste (idempotent):
+
+alter table public.daily_status_v2 enable row level security;
+
+drop policy if exists daily_status_v2_select_member on public.daily_status_v2;
+
+create policy daily_status_v2_select_member
+on public.daily_status_v2
+for select
+using (
+  exists (
+    select 1
+    from public.children c
+    where c.id = daily_status_v2.child_id
+      and public.is_family_member(c.family_id)
+  )
+);
+
+C) Ensure PostgREST role can read the table
+
+RLS is not enough if privileges are missing.
+
+grant select on public.daily_status_v2 to authenticated;
+
+
+⸻
+
+Why this exactly matches your symptom
+	•	Toggle RPC writes daily_status_v2 and adds points ✅
+	•	Parent UI refetch tries to read daily_status_v2 but SELECT fails ❌
+	•	Because the code ignores the error, it treats it as “no rows” → all unchecked ❌
+	•	Your optimistic UI gets overwritten by the failed refetch result ❌
+
+After these two fixes, the chore will visually check off and reorder correctly, and it will reset daily automatically because it’s keyed off the correct date_key.

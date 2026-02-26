@@ -1,0 +1,94 @@
+Tell your developer this, exactly — it’s a UI state + query refresh problem, not a points problem.
+
+⸻
+
+Bug: Points update, but chore doesn’t visually check off / move to bottom
+
+Expected behavior
+	•	When a chore is completed, it should immediately:
+	1.	show as checked (or pending if verification requires it)
+	2.	move into the correct section/order for today
+	•	Each day resets automatically (new day = unchecked/pending/approved computed fresh from DB for that day)
+
+⸻
+
+Root cause (most likely)
+
+The toggle action updates the points ledger, but the UI list is not re-rendering from the daily completion source of truth for the current day (daily_status table), or it’s using a mismatched dateKey or stale cache.
+
+⸻
+
+Required fix (front end)
+
+1) One canonical “today” dateKey (local time)
+
+All of these must use the same YYYY-MM-DD date key:
+	•	the toggle request payload
+	•	the daily_status query filter
+	•	the UI completion mapping
+
+No toISOString() anywhere for this (UTC drift breaks daily reset).
+
+Use:
+
+export function localDateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`; // YYYY-MM-DD local
+}
+
+2) UI must derive “checked/pending” from daily_status rows, not local booleans
+
+Build a lookup map:
+
+const statusByChoreId = new Map(statusRows.map(r => [r.chore_id, r.status]));
+const status = statusByChoreId.get(chore.id) ?? "unchecked";
+
+Then:
+	•	checked = status === "approved"
+	•	pending = status === "pending"
+
+3) After toggle, update the UI immediately (optimistic update) and still refetch
+
+In useToggleChore and useKidToggleChore:
+	•	setQueryData to update the toggled chore’s status in the cached list
+	•	then invalidateQueries for the exact chores key
+
+Key requirement: use an exact stable query key like:
+	•	["chores", familyId, childId, dateKey]
+
+Not catalog.length or other unstable stuff.
+
+4) Sort order must be based on status
+
+Order should be:
+	1.	unchecked
+	2.	pending
+	3.	approved
+
+With a stable tie-breaker (title/id):
+
+const rank = { unchecked: 0, pending: 1, approved: 2 } as const;
+
+items.sort((a, b) =>
+  (rank[a.status] - rank[b.status]) ||
+  a.title.localeCompare(b.title)
+);
+
+5) Daily reset is automatic if dateKey is correct
+
+No “reset job” is required if you query by dateKey = localDateKey() every day.
+A new day naturally shows everything unchecked unless there are rows for that date.
+
+⸻
+
+Dev acceptance test
+	1.	Complete a chore → it immediately checks and moves to bottom.
+	2.	Complete a high-value chore (with verification) → shows pending and moves to pending section (not bottom).
+	3.	Reload page → state persists for the day.
+	4.	Next day → all chores appear unchecked again.
+
+⸻
+
+If you want to be ruthless about speed, tell your dev: log the exact dateKey sent to the toggle RPC and the dateKey used in the daily_status query — they must match. This is the fastest way to catch the bug.
