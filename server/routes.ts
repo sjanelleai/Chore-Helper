@@ -37,12 +37,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const parsed = familySummarySchema.parse(req.body);
       await sendFamilySummaryEmail(parsed.emails, parsed.summary as FamilySummaryData);
       res.json({ message: `Summary email sent to ${parsed.emails.length} recipient(s)!` });
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (e instanceof z.ZodError) {
         return res.status(400).json({ message: e.errors[0].message });
       }
       console.error("Email send error:", e);
-      res.status(500).json({ message: e.message || "Failed to send email" });
+      const message = e instanceof Error ? e.message : "Failed to send email";
+      res.status(500).json({ message });
     }
   });
 

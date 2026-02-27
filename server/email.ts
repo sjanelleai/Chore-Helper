@@ -2,7 +2,23 @@
 // SendGrid integration for daily parent email summaries
 import sgMail from '@sendgrid/mail';
 
-let connectionSettings: any;
+interface SendGridConnectorSettings {
+  settings?: {
+    api_key?: string;
+    from_email?: string;
+  };
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+let connectionSettings: SendGridConnectorSettings | undefined;
 
 async function getCredentials() {
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
@@ -75,25 +91,25 @@ export interface FamilySummaryData {
 
 function renderChildSection(child: ChildDailySummary): string {
   const completedList = child.completedChores.length > 0
-    ? child.completedChores.map(c => `<li style="padding:3px 0;color:#16a34a;">&#10003; ${c}</li>`).join('')
+    ? child.completedChores.map(c => `<li style="padding:3px 0;color:#16a34a;">&#10003; ${escapeHtml(c)}</li>`).join('')
     : '<li style="color:#9ca3af;">No chores completed today</li>';
 
   const missedList = child.missedChores.length > 0
-    ? child.missedChores.map(c => `<li style="padding:3px 0;color:#ef4444;">&#10007; ${c}</li>`).join('')
+    ? child.missedChores.map(c => `<li style="padding:3px 0;color:#ef4444;">&#10007; ${escapeHtml(c)}</li>`).join('')
     : '<li style="color:#22c55e;">All chores completed!</li>';
 
   const bonusList = child.bonuses.length > 0
-    ? child.bonuses.map(b => `<li style="padding:3px 0;">+${b.points} pts - ${b.reason}${b.note ? ` (${b.note})` : ''}</li>`).join('')
+    ? child.bonuses.map(b => `<li style="padding:3px 0;">+${b.points} pts - ${escapeHtml(b.reason)}${b.note ? ` (${escapeHtml(b.note)})` : ''}</li>`).join('')
     : '';
 
   const redemptionList = child.redemptions.length > 0
-    ? child.redemptions.map(r => `<li style="padding:3px 0;">-${r.cost} pts - ${r.name}</li>`).join('')
+    ? child.redemptions.map(r => `<li style="padding:3px 0;">-${r.cost} pts - ${escapeHtml(r.name)}</li>`).join('')
     : '';
 
   return `
     <div style="margin-bottom:24px;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
       <div style="background:linear-gradient(135deg,#6366f1,#8b5cf6);padding:12px 16px;">
-        <h2 style="margin:0;color:#ffffff;font-size:20px;">${child.childName}</h2>
+        <h2 style="margin:0;color:#ffffff;font-size:20px;">${escapeHtml(child.childName)}</h2>
       </div>
       <div style="padding:16px;">
         <div style="display:flex;gap:12px;margin-bottom:16px;">
@@ -157,7 +173,7 @@ function formatFamilySummaryEmail(summary: FamilySummaryData): { subject: string
   <div style="font-family:'DM Sans',system-ui,sans-serif;max-width:600px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;">
     <div style="background:linear-gradient(135deg,#3b82f6,#8b5cf6);padding:32px;text-align:center;">
       <h1 style="margin:0;color:#ffffff;font-size:28px;">HomeQuest</h1>
-      <p style="margin:8px 0 0;color:#e0e7ff;font-size:14px;">${summary.familyName} - Daily Summary</p>
+      <p style="margin:8px 0 0;color:#e0e7ff;font-size:14px;">${escapeHtml(summary.familyName)} - Daily Summary</p>
       <p style="margin:4px 0 0;color:#c7d2fe;font-size:12px;">${dateFormatted}</p>
     </div>
 
@@ -203,12 +219,15 @@ export async function sendFamilySummaryEmail(toEmails: string[], summary: Family
     );
 
     await Promise.all(sendPromises);
-  } catch (err: any) {
-    if (err?.response?.body?.errors) {
-      const sgErrors = err.response.body.errors;
-      console.error('SendGrid API errors:', JSON.stringify(sgErrors, null, 2));
-      const messages = sgErrors.map((e: any) => e.message).join('; ');
-      throw new Error(`SendGrid: ${messages}`);
+  } catch (err: unknown) {
+    if (err instanceof Error && 'response' in err) {
+      const sgErr = err as Error & { response?: { body?: { errors?: Array<{ message: string }> } } };
+      if (sgErr.response?.body?.errors) {
+        const sgErrors = sgErr.response.body.errors;
+        console.error('SendGrid API errors:', JSON.stringify(sgErrors, null, 2));
+        const messages = sgErrors.map(e => e.message).join('; ');
+        throw new Error(`SendGrid: ${messages}`);
+      }
     }
     throw err;
   }
