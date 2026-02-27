@@ -11,7 +11,7 @@
 --
 -- REQUIRED SUPABASE SECRETS (set via CLI or Dashboard):
 --   supabase secrets set SENDGRID_API_KEY=<your_sendgrid_api_key>
---   supabase secrets set SENDGRID_FROM_EMAIL=<your_verified_sender@domain.com>
+--   supabase secrets set SENDGRID_FROM_EMAIL=apps@oibrigado.com
 --   supabase secrets set SENDGRID_FROM_NAME="HomeQuest"
 --
 -- DEPLOY EDGE FUNCTIONS (run from project root):
