@@ -505,6 +505,28 @@ function detectTimezone() {
   }
 }
 
+function getNextSendLabel(time: string, timezone: string): string {
+  try {
+    const [h, m] = time.split(":").map(Number);
+    const now = new Date();
+    // Get current date/time in the target timezone
+    const nowInTz = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
+    const target = new Date(nowInTz);
+    target.setHours(h, m, 0, 0);
+    const isToday = nowInTz < target;
+    const label = isToday ? "Today" : "Tomorrow";
+    const timeLabel = target.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: timezone,
+      timeZoneName: "short",
+    });
+    return `${label} at ${timeLabel}`;
+  } catch {
+    return time;
+  }
+}
+
 function SettingsSection() {
   const { data: userState } = useUserState();
   const { user } = useAuth();
@@ -580,9 +602,11 @@ function SettingsSection() {
         <div className="flex items-center justify-between gap-2 p-3 rounded-xl border">
           <div>
             <p className="font-bold text-sm flex items-center gap-1">
-              <Mail className="w-4 h-4" /> Nightly Summary Email
+              <Mail className="w-4 h-4" /> Daily Summary Email
             </p>
-            <p className="text-xs text-muted-foreground">Auto-send "today so far" at your chosen time</p>
+            <p className="text-xs text-muted-foreground">
+              Auto-send a daily chores &amp; rewards snapshot at your chosen time
+            </p>
           </div>
           <button
             onClick={() => setSummaryEnabled(!summaryEnabled)}
@@ -630,6 +654,12 @@ function SettingsSection() {
                   <option value={summaryTimezone}>{formatTimezoneLabel(summaryTimezone)}</option>
                 )}
               </select>
+            </div>
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-primary/5 border border-primary/15">
+              <Clock className="w-3.5 h-3.5 text-primary shrink-0" />
+              <p className="text-xs text-primary font-medium">
+                Next send: {getNextSendLabel(summaryTime, summaryTimezone)}
+              </p>
             </div>
           </div>
         )}
@@ -736,7 +766,7 @@ function SummarySection() {
                 : "Set email in settings first"}
             </Button>
             <p className="text-xs text-muted-foreground text-center">
-              Sends tonight's summary email right now to validate the full pipeline
+              Sends today's summary email right now — use this to confirm your setup works
             </p>
           </div>
         </div>
