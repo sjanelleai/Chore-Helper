@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import {
   useUserState, useUpdateSettings,
   useUpdateChoreConfig, useUpdateRewardConfig,
-  useAwardBonus, useDailySummary, useSendSummaryEmail,
+  useAwardBonus, useDeductPoints, useDailySummary, useSendSummaryEmail,
   useChoreCatalog, useRewardCatalog,
   useFamilySettings,
   usePendingApprovals, useApproveChore, useRejectChore,
@@ -18,7 +18,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
-  Mail, Settings, Star,
+  Mail, Settings, Star, Minus,
   ChevronDown, ChevronUp, Loader2,
   CheckSquare, ShoppingBag, UserPlus, LogOut, Users,
   Clock, Globe, Zap, Trash2, Copy, Check, Key, Shield,
@@ -111,6 +111,99 @@ function BonusSection() {
         >
           {bonusMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
           Award Bonus
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function DeductionSection() {
+  const deductMutation = useDeductPoints();
+  const [reason, setReason] = useState(CATALOG.deductionReasons[0].id);
+  const [points, setPoints] = useState(10);
+  const [note, setNote] = useState("");
+
+  const handleDeduct = () => {
+    deductMutation.mutate(
+      { reason, points, note: note || undefined },
+      { onSuccess: () => { setNote(""); setPoints(10); } }
+    );
+  };
+
+  return (
+    <Card className="p-5 border-red-200 dark:border-red-900/40">
+      <h3 className="font-display font-bold text-lg mb-4 flex items-center gap-2">
+        <Minus className="w-5 h-5 text-red-500" />
+        Deduct Points
+      </h3>
+
+      <div className="space-y-4">
+        <div>
+          <label className="text-sm font-bold text-muted-foreground mb-1 block">Reason</label>
+          <select
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            className="w-full p-3 rounded-xl border bg-background text-foreground font-medium"
+            data-testid="select-deduction-reason"
+          >
+            {CATALOG.deductionReasons.map((r) => (
+              <option key={r.id} value={r.id}>{r.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-sm font-bold text-muted-foreground mb-1 block">Points to deduct (1–500)</label>
+          <div className="flex items-center gap-2 flex-wrap">
+            {[5, 10, 25, 50, 100].map(v => (
+              <button
+                key={v}
+                onClick={() => setPoints(v)}
+                className={cn(
+                  "px-3 py-2 rounded-xl font-bold text-sm border-2 transition-all",
+                  points === v
+                    ? "bg-red-500 text-white border-red-500"
+                    : "bg-background text-foreground border-border"
+                )}
+                data-testid={`button-deduct-${v}`}
+              >
+                -{v}
+              </button>
+            ))}
+          </div>
+          <input
+            type="range"
+            min="1"
+            max="500"
+            value={points}
+            onChange={(e) => setPoints(parseInt(e.target.value))}
+            className="w-full mt-2 accent-red-500"
+            data-testid="input-deduction-points-slider"
+          />
+          <p className="text-center font-mono font-bold text-lg mt-1 text-red-500" data-testid="text-deduction-points-value">-{points} pts</p>
+        </div>
+
+        <div>
+          <label className="text-sm font-bold text-muted-foreground mb-1 block">Note (optional)</label>
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. Hit sibling after warning"
+            className="w-full p-3 rounded-xl border bg-background text-foreground"
+            data-testid="input-deduction-note"
+          />
+        </div>
+
+        <Button
+          onClick={handleDeduct}
+          disabled={deductMutation.isPending}
+          variant="destructive"
+          className="w-full"
+          data-testid="button-deduct-points"
+        >
+          {deductMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+          Deduct Points
         </Button>
       </div>
     </Card>
@@ -1534,6 +1627,7 @@ export default function ParentPanel() {
         <ChildManagementSection />
         <ChildPinSection />
         <BonusSection />
+        <DeductionSection />
         <VerificationSection />
         <ChoreConfigSection />
         <RewardsManagementSection />

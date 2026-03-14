@@ -143,6 +143,16 @@ export const CATALOG = {
     { id: "honesty", name: "Honesty / owned a mistake" },
     { id: "extra_effort", name: "Extra effort" },
   ] as BonusReasonDef[],
+
+  deductionReasons: [
+    { id: "disrespect", name: "Disrespectful behavior" },
+    { id: "lying", name: "Lying / being dishonest" },
+    { id: "not_listening", name: "Not listening / defiant" },
+    { id: "aggression", name: "Physical aggression / hitting" },
+    { id: "bad_attitude", name: "Poor attitude / tantrum" },
+    { id: "damage", name: "Damage to property" },
+    { id: "screen_overuse", name: "Screen time overuse" },
+  ] as BonusReasonDef[],
 };
 
 export const STARTER_CHORES = ["make_bed", "hamper", "pick_up_floor", "homework_15", "pack_bag", "feed_pet"];
