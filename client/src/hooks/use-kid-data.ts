@@ -42,12 +42,10 @@ export function useKidChoreCatalog() {
     queryFn: async () => {
       const { data, error } = await supabase.rpc("kid_get_catalog", {
         p_kid_token: kidToken!,
-        p_type: "chore",
       });
       if (error) throw error;
-      const result = parseRpcResponse<{ ok?: boolean; error?: string; items?: unknown[] }>(data);
-      if (!result?.ok) throw new Error(result?.error || "Failed to load chores");
-      return (result.items || []) as ChoreCatalogItem[];
+      const result = parseRpcResponse<{ chores?: unknown[] }>(data);
+      return (result?.chores || []) as ChoreCatalogItem[];
     },
   });
 }
@@ -61,12 +59,10 @@ export function useKidRewardCatalog() {
     queryFn: async () => {
       const { data, error } = await supabase.rpc("kid_get_catalog", {
         p_kid_token: kidToken!,
-        p_type: "reward",
       });
       if (error) throw error;
-      const result = parseRpcResponse<{ ok?: boolean; error?: string; items?: unknown[] }>(data);
-      if (!result?.ok) throw new Error(result?.error || "Failed to load rewards");
-      return (result.items || []) as RewardCatalogItem[];
+      const result = parseRpcResponse<{ rewards?: unknown[] }>(data);
+      return (result?.rewards || []) as RewardCatalogItem[];
     },
   });
 }
