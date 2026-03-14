@@ -1,0 +1,191 @@
+// ============================================================
+// ChildSelectScreen — Parent selects which child to manage
+// Also allows adding a new child with a PIN.
+// ============================================================
+// Controls to create:
+//   rectHeader         - Rectangle
+//   lblTitle           - Label "Who's doing chores?"
+//   galChildren        - Gallery (grid or vertical)
+//     Each item:
+//       rectCard        - Rectangle
+//       lblAvatar       - Label (emoji or first letter)
+//       lblChildName    - Label
+//       lblPoints       - Label "X pts"
+//   btnAddChild        - Button "+ Add Child"
+//   ── Add Child Form (show/hide panel) ──
+//   rectAddPanel       - Rectangle overlay
+//   txtNewName         - TextInput (child name)
+//   txtNewPIN          - TextInput (4-digit PIN, password)
+//   btnSaveChild       - Button "Save"
+//   btnCancelAdd       - Button "Cancel"
+//   lblAddError        - Label (error)
+// ============================================================
+
+// ── Screen.OnVisible ─────────────────────────────────────────
+Set(gblShowAddChild, false);
+Set(gblAddChildError, Blank());
+
+// Build children with their current point balances
+ClearCollect(colChildrenDisplay,
+    AddColumns(colChildrenLocal,
+        "CurrentPoints",
+            Sum(
+                Filter(colLedgerLocal, ChildID = ThisRecord.ID),
+                PointsDelta
+            )
+    )
+);
+
+// ── galChildren.Items ─────────────────────────────────────────
+colChildrenDisplay
+
+// ── galChildren item — rectCard.Fill ──────────────────────────
+gblColors.Card
+
+// ── galChildren item — rectCard.BorderColor ───────────────────
+If(ThisItem.ID = gblCurrentChild.ID,
+    gblColors.Primary,
+    gblColors.Border)
+
+// ── galChildren item — rectCard.BorderThickness ───────────────
+If(ThisItem.ID = gblCurrentChild.ID, 3, 1)
+
+// ── galChildren item — lblAvatar.Text ─────────────────────────
+// Show first letter of name as avatar (or use AvatarURL with Image control)
+Upper(Left(ThisItem.Title, 1))
+
+// ── galChildren item — lblAvatar.Color ────────────────────────
+gblColors.Card
+
+// ── galChildren item — rectAvatarBg.Fill ──────────────────────
+// Give each child a consistent color based on their index
+Switch(
+    Mod(ThisItem.ID, 5),
+    0, gblColors.Primary,
+    1, gblColors.Success,
+    2, gblColors.Warning,
+    3, ColorValue("#8B5CF6"),  // purple
+       ColorValue("#EC4899")   // pink
+)
+
+// ── galChildren item — lblChildName.Text ──────────────────────
+ThisItem.Title
+
+// ── galChildren item — lblPoints.Text ─────────────────────────
+Text(ThisItem.CurrentPoints, "[$-en]#,###,##0") & " pts"
+
+// ── galChildren item — lblPoints.Color ────────────────────────
+gblColors.Primary
+
+// ── galChildren item — OnSelect ───────────────────────────────
+Set(gblCurrentChild, ThisItem);
+
+// Load this child's data
+If(Connection.Connected,
+    ClearCollect(colLedgerLocal,
+        Filter(PointsLedger, ChildID = ThisItem.ID));
+    SaveData(colLedgerLocal, "cache_ledger");
+
+    ClearCollect(colDailyStatusLocal,
+        Filter(DailyStatus,
+            ChildID = ThisItem.ID &&
+            DateKey = gblTodayDate));
+    SaveData(colDailyStatusLocal, "cache_daily_status");
+
+    ClearCollect(colBadgesLocal,
+        Filter(ChildBadges, ChildID = ThisItem.ID));
+    SaveData(colBadgesLocal, "cache_badges")
+);
+
+Set(gblPointsBalance,
+    Sum(Filter(colLedgerLocal, ChildID = ThisItem.ID), PointsDelta));
+Set(gblLifetimePoints,
+    Sum(Filter(colLedgerLocal,
+        ChildID = ThisItem.ID && PointsDelta > 0), PointsDelta));
+
+Navigate(HomeScreen, ScreenTransition.Cover);
+
+// ── btnAddChild.Text ──────────────────────────────────────────
+"+ Add Child"
+
+// ── btnAddChild.Fill ──────────────────────────────────────────
+gblColors.Primary
+
+// ── btnAddChild.Color ─────────────────────────────────────────
+gblColors.Card
+
+// ── btnAddChild.OnSelect ──────────────────────────────────────
+Set(gblShowAddChild, true);
+Reset(txtNewName);
+Reset(txtNewPIN);
+Set(gblAddChildError, Blank())
+
+// ── Add Child Panel Visible ───────────────────────────────────
+// All add-child controls: Visible = gblShowAddChild
+
+// ── txtNewName HintText ───────────────────────────────────────
+"Child's name"
+
+// ── txtNewPIN HintText ────────────────────────────────────────
+"4-digit PIN"
+
+// ── txtNewPIN Mode ────────────────────────────────────────────
+// Set to Password in properties pane
+
+// ── btnSaveChild.Text ─────────────────────────────────────────
+"Save Child"
+
+// ── btnSaveChild.DisplayMode ──────────────────────────────────
+If(Len(Trim(txtNewName.Text)) >= 2 && Len(txtNewPIN.Text) = 4,
+    DisplayMode.Edit,
+    DisplayMode.Disabled)
+
+// ── btnSaveChild.OnSelect ─────────────────────────────────────
+Set(gblAddChildError, Blank());
+
+// Check name not already used
+If(!IsBlank(LookUp(colChildrenLocal,
+        FamilyID = gblCurrentFamily.ID &&
+        Lower(Title) = Lower(Trim(txtNewName.Text)))),
+    Set(gblAddChildError, "A child with that name already exists."),
+
+    If(Connection.Connected,
+        With({
+            newChild: Patch(Children, Defaults(Children), {
+                Title:    Trim(txtNewName.Text),
+                FamilyID: gblCurrentFamily.ID,
+                ChildPIN: txtNewPIN.Text,
+                IsActive: true
+            })
+        },
+            If(!IsBlank(newChild.ID),
+                Collect(colChildrenLocal, newChild);
+                SaveData(colChildrenLocal, "cache_children");
+                Set(gblShowAddChild, false);
+
+                // Rebuild display
+                ClearCollect(colChildrenDisplay,
+                    AddColumns(colChildrenLocal,
+                        "CurrentPoints",
+                            Sum(Filter(colLedgerLocal, ChildID = ThisRecord.ID), PointsDelta)
+                    )
+                ),
+                Set(gblAddChildError, "Error saving child. Check your connection.")
+            )
+        ),
+        Set(gblAddChildError, "You must be online to add a new child.")
+    )
+);
+
+// ── btnCancelAdd.OnSelect ─────────────────────────────────────
+Set(gblShowAddChild, false);
+Set(gblAddChildError, Blank())
+
+// ── lblAddError.Visible ───────────────────────────────────────
+!IsBlank(gblAddChildError)
+
+// ── lblAddError.Text ──────────────────────────────────────────
+gblAddChildError
+
+// ── lblAddError.Color ─────────────────────────────────────────
+gblColors.Danger

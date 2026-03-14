@@ -1,0 +1,121 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "_description": "Chore Helper — Approval Notification Flow. Fires when a chore status changes to 'pending', sends a push notification or email to the parent. Import into Power Automate and reconnect SharePoint + Notifications connections.",
+  "_setup": [
+    "1. Import this flow in Power Automate",
+    "2. Update the SharePoint Site URL in the trigger",
+    "3. Reconnect connections (SharePoint, Office 365 Outlook or Push Notification)",
+    "4. Turn the flow on"
+  ],
+  "triggers": {
+    "When_DailyStatus_item_modified": {
+      "type": "ApiConnection",
+      "inputs": {
+        "host": {
+          "connection": {
+            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+          }
+        },
+        "method": "get",
+        "path": "/datasets/@{encodeURIComponent(encodeURIComponent('YOUR_SHAREPOINT_SITE_URL'))}/tables/@{encodeURIComponent(encodeURIComponent('DailyStatus'))}/onupdateditems"
+      },
+      "recurrence": {
+        "frequency": "Minute",
+        "interval": 1
+      }
+    }
+  },
+  "actions": {
+    "Filter_pending_only": {
+      "type": "Query",
+      "inputs": {
+        "from": "@triggerBody()?['value']",
+        "where": "@equals(item()?['Status'], 'pending')"
+      },
+      "runAfter": {}
+    },
+    "For_each_pending": {
+      "type": "Foreach",
+      "foreach": "@body('Filter_pending_only')",
+      "actions": {
+        "Get_child_name": {
+          "type": "ApiConnection",
+          "inputs": {
+            "host": {
+              "connection": {
+                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+              }
+            },
+            "method": "get",
+            "path": "/datasets/@{encodeURIComponent(encodeURIComponent('YOUR_SHAREPOINT_SITE_URL'))}/tables/@{encodeURIComponent(encodeURIComponent('Children'))}/items/@{items('For_each_pending')?['ChildID']}"
+          },
+          "runAfter": {}
+        },
+        "Get_chore_name": {
+          "type": "ApiConnection",
+          "inputs": {
+            "host": {
+              "connection": {
+                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+              }
+            },
+            "method": "get",
+            "path": "/datasets/@{encodeURIComponent(encodeURIComponent('YOUR_SHAREPOINT_SITE_URL'))}/tables/@{encodeURIComponent(encodeURIComponent('ChoreCatalog'))}/items/@{items('For_each_pending')?['ChoreID']}"
+          },
+          "runAfter": {}
+        },
+        "Get_family_settings": {
+          "type": "ApiConnection",
+          "inputs": {
+            "host": {
+              "connection": {
+                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+              }
+            },
+            "method": "get",
+            "path": "/datasets/@{encodeURIComponent(encodeURIComponent('YOUR_SHAREPOINT_SITE_URL'))}/tables/@{encodeURIComponent(encodeURIComponent('FamilySettings'))}/items",
+            "queries": {
+              "$filter": "FamilyID eq @{body('Get_child_name')?['FamilyID']}",
+              "$top": 1
+            }
+          },
+          "runAfter": {
+            "Get_child_name": ["Succeeded"]
+          }
+        },
+        "Send_approval_email": {
+          "type": "ApiConnection",
+          "inputs": {
+            "host": {
+              "connection": {
+                "name": "@parameters('$connections')['office365']['connectionId']"
+              }
+            },
+            "method": "post",
+            "path": "/v2/Mail",
+            "body": {
+              "To": "@{first(body('Get_family_settings')?['value'])?['PrimaryEmail']}",
+              "Subject": "⏳ @{body('Get_child_name')?['Title']} needs approval — @{body('Get_chore_name')?['Title']}",
+              "Body": "<div style='font-family:sans-serif'><h3 style='color:#6366F1'>Chore Approval Needed</h3><p><b>@{body('Get_child_name')?['Title']}</b> completed <b>@{body('Get_chore_name')?['Title']}</b> and is waiting for your approval.</p><p>Open the Chore Helper app and go to <b>Parent Panel → Approvals</b> to approve or reject.</p></div>",
+              "IsHtml": true
+            }
+          },
+          "runAfter": {
+            "Get_chore_name": ["Succeeded"],
+            "Get_family_settings": ["Succeeded"]
+          }
+        }
+      },
+      "runAfter": {
+        "Filter_pending_only": ["Succeeded"]
+      }
+    }
+  },
+  "parameters": {
+    "$connections": {
+      "defaultValue": {},
+      "type": "Object"
+    }
+  }
+}

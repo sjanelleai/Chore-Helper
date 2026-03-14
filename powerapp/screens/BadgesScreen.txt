@@ -1,0 +1,131 @@
+// ============================================================
+// BadgesScreen — Achievement badges with progress
+// ============================================================
+// Controls to create:
+//   rectHeader      - Rectangle
+//   lblTitle        - Label "Badges"
+//   btnBack         - Button "← Back"
+//   galBadges       - Gallery (vertical or 2-col grid)
+//     Each item:
+//       rectCard      - Rectangle (card bg)
+//       lblIcon       - Label (emoji icon)
+//       lblBadgeName  - Label
+//       lblThreshold  - Label "Earn X lifetime pts"
+//       progBadgeBg   - Rectangle (progress bar track)
+//       progBadgeFill - Rectangle (progress bar fill)
+//       lblPct        - Label "75%"
+//       lblEarned     - Label "Earned!" (visible only if unlocked)
+// ============================================================
+
+// ── Screen.OnVisible ─────────────────────────────────────────
+// Build badge status list
+ClearCollect(colBadgeStatus,
+    ForAll(colBadgeDefs,
+        {
+            BadgeKey:   ThisRecord.BadgeKey,
+            Name:       ThisRecord.Name,
+            Icon:       ThisRecord.Icon,
+            Threshold:  ThisRecord.Threshold,
+            IsEarned:   gblLifetimePoints >= ThisRecord.Threshold,
+            Progress:   Min(gblLifetimePoints / ThisRecord.Threshold * 100, 100),
+            EarnedDate: LookUp(colBadgesLocal,
+                            ChildID = gblCurrentChild.ID &&
+                            BadgeKey = ThisRecord.BadgeKey).EarnedDate
+        }
+    )
+);
+
+// Check for newly unlocked badges (and save to SharePoint if online)
+ForAll(
+    Filter(colBadgeStatus, IsEarned = true),
+    If(IsBlank(LookUp(colBadgesLocal,
+            ChildID = gblCurrentChild.ID && BadgeKey = ThisRecord.BadgeKey)),
+        // New badge earned!
+        Collect(colBadgesLocal, {
+            ChildID:     gblCurrentChild.ID,
+            BadgeKey:    ThisRecord.BadgeKey,
+            Title:       ThisRecord.Name,
+            BadgeIcon:   ThisRecord.Icon,
+            Threshold:   ThisRecord.Threshold,
+            EarnedDate:  Now()
+        });
+        If(Connection.Connected,
+            Patch(ChildBadges, Defaults(ChildBadges), {
+                Title:      ThisRecord.Name,
+                ChildID:    gblCurrentChild.ID,
+                BadgeKey:   ThisRecord.BadgeKey,
+                BadgeIcon:  ThisRecord.Icon,
+                Threshold:  ThisRecord.Threshold,
+                EarnedDate: Now()
+            })
+        );
+        SaveData(colBadgesLocal, "cache_badges")
+    )
+);
+
+// ── galBadges.Items ───────────────────────────────────────────
+colBadgeStatus
+
+// ── galBadges item — rectCard.Fill ───────────────────────────
+If(ThisItem.IsEarned,
+    gblColors.Card,
+    RGBA(248, 250, 252, 1))  // slightly dimmer when locked
+
+// ── galBadges item — rectCard.BorderColor ────────────────────
+If(ThisItem.IsEarned,
+    gblColors.Warning,
+    gblColors.Border)
+
+// ── galBadges item — rectCard.BorderThickness ────────────────
+If(ThisItem.IsEarned, 2, 1)
+
+// ── galBadges item — lblIcon.Text ────────────────────────────
+ThisItem.Icon
+
+// ── galBadges item — lblIcon.Size ────────────────────────────
+36
+
+// ── galBadges item — lblIcon.Color ───────────────────────────
+If(ThisItem.IsEarned, RGBA(0,0,0,1), RGBA(0,0,0,0.3))
+
+// ── galBadges item — lblBadgeName.Text ───────────────────────
+ThisItem.Name
+
+// ── galBadges item — lblBadgeName.Color ──────────────────────
+If(ThisItem.IsEarned, gblColors.Text, gblColors.TextMuted)
+
+// ── galBadges item — lblThreshold.Text ───────────────────────
+Text(ThisItem.Threshold, "[$-en]#,###,##0") & " lifetime pts"
+
+// ── galBadges item — lblThreshold.Color ──────────────────────
+gblColors.TextMuted
+
+// ── galBadges item — progBadgeBg.Fill ────────────────────────
+gblColors.Border
+
+// ── galBadges item — progBadgeFill.Fill ──────────────────────
+If(ThisItem.IsEarned, gblColors.Warning, gblColors.Primary)
+
+// ── galBadges item — progBadgeFill.Width ─────────────────────
+// Assume progBadgeBg is 200px wide
+(ThisItem.Progress / 100) * 200
+
+// ── galBadges item — lblPct.Text ─────────────────────────────
+If(ThisItem.IsEarned,
+    "100%",
+    Text(Round(ThisItem.Progress, 0)) & "%")
+
+// ── galBadges item — lblPct.Color ────────────────────────────
+If(ThisItem.IsEarned, gblColors.Warning, gblColors.Primary)
+
+// ── galBadges item — lblEarned.Visible ───────────────────────
+ThisItem.IsEarned
+
+// ── galBadges item — lblEarned.Text ──────────────────────────
+"✓ Earned!"
+
+// ── galBadges item — lblEarned.Color ─────────────────────────
+gblColors.Success
+
+// ── btnBack.OnSelect ─────────────────────────────────────────
+Navigate(HomeScreen, ScreenTransition.UnCover)

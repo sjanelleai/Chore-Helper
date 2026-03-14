@@ -1,0 +1,191 @@
+// ============================================================
+// LoginScreen — Parent login (Office 365 identity)
+// ============================================================
+// Controls to create:
+//   imgLogo         - Image (app logo or emoji label)
+//   lblTitle        - Label  "Chore Helper"
+//   lblSubtitle     - Label  "Sign in to manage your family"
+//   btnSignIn       - Button "Sign In with Microsoft"
+//   lblOr           - Label  "— or —"
+//   lblKidLink      - Label  "I'm a kid →"  (tap to go to KidJoinScreen)
+//   lblError        - Label  (hidden unless error)
+//   rectBg          - Rectangle (background)
+// ============================================================
+
+// ── Screen.Fill ──────────────────────────────────────────────
+gblColors.Background
+
+// ── rectBg.Fill ──────────────────────────────────────────────
+gblColors.Primary
+
+// ── imgLogo.Text (use a Label as logo emoji) ─────────────────
+"🏠"
+
+// ── lblTitle.Text ─────────────────────────────────────────────
+"Chore Helper"
+
+// ── lblTitle.Color ────────────────────────────────────────────
+gblColors.Card
+
+// ── lblTitle.Size ─────────────────────────────────────────────
+32
+
+// ── lblSubtitle.Text ──────────────────────────────────────────
+"Family chore tracker"
+
+// ── lblSubtitle.Color ─────────────────────────────────────────
+RGBA(255,255,255,0.8)
+
+// ── btnSignIn.Text ────────────────────────────────────────────
+"Sign In with Microsoft"
+
+// ── btnSignIn.Fill ────────────────────────────────────────────
+gblColors.Card
+
+// ── btnSignIn.Color ───────────────────────────────────────────
+gblColors.Primary
+
+// ── btnSignIn.OnSelect ────────────────────────────────────────
+// Power Apps uses the signed-in Office 365 user automatically.
+// We just look up their family record.
+If(Connection.Connected,
+    With({
+        userEmail: Lower(Office365Users.MyProfileV2().mail)
+    },
+        With({
+            family: LookUp(Families, Lower(OwnerEmail) = userEmail)
+        },
+            If(!IsBlank(family),
+                // Known parent — load context
+                Set(gblCurrentFamily, family);
+                Set(gblMode, "parent");
+                Set(gblFamilySettings,
+                    LookUp(FamilySettings, FamilyID = family.ID));
+
+                // Refresh caches
+                ClearCollect(colChildrenLocal,
+                    Filter(Children, FamilyID = family.ID, IsActive = true));
+                SaveData(colChildrenLocal, "cache_children");
+
+                ClearCollect(colChoresLocal,
+                    Filter(ChoreCatalog, FamilyID = family.ID, IsActive = true));
+                SaveData(colChoresLocal, "cache_chores");
+
+                ClearCollect(colRewardsLocal,
+                    Filter(RewardCatalog, FamilyID = family.ID, IsActive = true));
+                SaveData(colRewardsLocal, "cache_rewards");
+
+                Navigate(ChildSelectScreen, ScreenTransition.Cover),
+
+            // New user — create family
+                With({
+                    newFamily: Patch(Families, Defaults(Families), {
+                        Title:      Office365Users.MyProfileV2().displayName & "'s Family",
+                        OwnerEmail: userEmail,
+                        FamilyCode: Text(RandBetween(100000, 999999))
+                    })
+                },
+                    Set(gblCurrentFamily, newFamily);
+                    Set(gblMode, "parent");
+
+                    // Create default settings
+                    Patch(FamilySettings, Defaults(FamilySettings), {
+                        Title:                 Text(newFamily.ID),
+                        FamilyID:              newFamily.ID,
+                        ApprovalMode:          "smart",
+                        ApprovalThreshold:     50,
+                        DailySummaryEnabled:   false,
+                        Timezone:              "America/New_York"
+                    });
+                    Set(gblFamilySettings,
+                        LookUp(FamilySettings, FamilyID = newFamily.ID));
+
+                    // Seed default chore catalog
+                    // (Add all default chores — truncated here for readability;
+                    //  see data/sharepoint-schema.md for the full list)
+                    ForAll(
+                        Table(
+                            {Category:"Room",    Title:"Make bed",             Points:15},
+                            {Category:"Room",    Title:"Put clothes in hamper", Points:15},
+                            {Category:"Room",    Title:"Pick up floor",         Points:20},
+                            {Category:"Room",    Title:"Tidy desk",             Points:20},
+                            {Category:"Room",    Title:"Clean room (quick)",    Points:35},
+                            {Category:"Room",    Title:"Clean room (deep)",     Points:120},
+                            {Category:"Kitchen", Title:"Clear plate",           Points:15},
+                            {Category:"Kitchen", Title:"Load dishwasher",       Points:30},
+                            {Category:"Kitchen", Title:"Unload dishwasher",     Points:40},
+                            {Category:"Kitchen", Title:"Wipe counters",         Points:35},
+                            {Category:"Kitchen", Title:"Set table",             Points:20},
+                            {Category:"Pets",    Title:"Feed pet",              Points:20},
+                            {Category:"Pets",    Title:"Water bowl",            Points:15},
+                            {Category:"Pets",    Title:"Pet cleanup",           Points:40},
+                            {Category:"School",  Title:"Homework 15 min",       Points:25},
+                            {Category:"School",  Title:"Homework 30 min",       Points:50},
+                            {Category:"School",  Title:"Reading 15 min",        Points:25},
+                            {Category:"School",  Title:"Pack backpack",         Points:20},
+                            {Category:"Family",  Title:"Help a sibling",        Points:25},
+                            {Category:"Family",  Title:"Take out trash",        Points:25},
+                            {Category:"Family",  Title:"Laundry helper",        Points:40}
+                        ),
+                        Patch(ChoreCatalog, Defaults(ChoreCatalog), {
+                            Title:    ThisRecord.Title,
+                            FamilyID: newFamily.ID,
+                            Category: ThisRecord.Category,
+                            Points:   ThisRecord.Points,
+                            IsActive: true,
+                            ApprovalOverride: "inherit"
+                        })
+                    );
+
+                    // Seed default reward catalog
+                    ForAll(
+                        Table(
+                            {Category:"Privileges",  Title:"Pick music in car",   Cost:700},
+                            {Category:"Privileges",  Title:"+15 min screen time", Cost:1200},
+                            {Category:"Privileges",  Title:"+30 min screen time", Cost:2000},
+                            {Category:"Privileges",  Title:"+15 min bedtime",     Cost:1400},
+                            {Category:"Experiences", Title:"Ice cream trip",      Cost:2200},
+                            {Category:"Experiences", Title:"Movie night",         Cost:2600},
+                            {Category:"Experiences", Title:"Arcade",              Cost:3500},
+                            {Category:"Food Treats", Title:"Dessert tonight",     Cost:1200},
+                            {Category:"Food Treats", Title:"Pick dinner",         Cost:3200},
+                            {Category:"Toys/Items",  Title:"Small trinket",       Cost:3000},
+                            {Category:"Allowance",   Title:"$5 cash",             Cost:0}
+                        ),
+                        Patch(RewardCatalog, Defaults(RewardCatalog), {
+                            Title:    ThisRecord.Title,
+                            FamilyID: newFamily.ID,
+                            Category: ThisRecord.Category,
+                            Cost:     ThisRecord.Cost,
+                            IsActive: true,
+                            RequiresApproval: false
+                        })
+                    );
+
+                    Navigate(ChildSelectScreen, ScreenTransition.Cover)
+                )
+            )
+        )
+    ),
+
+    // Offline — can't log in fresh
+    Set(gblLoginError, "You need an internet connection to sign in for the first time.")
+);
+
+// ── lblError.Visible ──────────────────────────────────────────
+!IsBlank(gblLoginError)
+
+// ── lblError.Text ─────────────────────────────────────────────
+gblLoginError
+
+// ── lblError.Color ────────────────────────────────────────────
+gblColors.Danger
+
+// ── lblKidLink.Text ───────────────────────────────────────────
+"I'm a kid — tap here to join"
+
+// ── lblKidLink.Color ──────────────────────────────────────────
+RGBA(255,255,255,0.9)
+
+// ── lblKidLink.OnSelect ───────────────────────────────────────
+Navigate(KidJoinScreen, ScreenTransition.Cover)
