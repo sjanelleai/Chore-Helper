@@ -1,0 +1,183 @@
+// ============================================================
+// App.OnStart
+// Paste this into the App's OnStart property in Power Apps Studio.
+// This runs once when the app launches on any device.
+// ============================================================
+
+// ── 1. Global constants ──────────────────────────────────────
+Set(gblVersion, "1.0.0");
+Set(gblTodayDate, Today());
+
+// Color palette
+Set(gblColors, {
+    Primary:    ColorValue("#6366F1"),
+    Success:    ColorValue("#22C55E"),
+    Warning:    ColorValue("#F59E0B"),
+    Danger:     ColorValue("#EF4444"),
+    Background: ColorValue("#F8FAFC"),
+    Card:       ColorValue("#FFFFFF"),
+    Text:       ColorValue("#1E293B"),
+    TextMuted:  ColorValue("#64748B"),
+    Border:     ColorValue("#E2E8F0")
+});
+
+// Badge definitions (static)
+ClearCollect(colBadgeDefs,
+    {BadgeKey:"starter",   Name:"Starter",       Icon:"⭐",  Threshold:50},
+    {BadgeKey:"helper2",   Name:"Helper Level 2", Icon:"🌟", Threshold:150},
+    {BadgeKey:"master",    Name:"Chore Master",   Icon:"🏆", Threshold:300},
+    {BadgeKey:"star",      Name:"Super Star",     Icon:"💫", Threshold:500},
+    {BadgeKey:"champion",  Name:"Champion",       Icon:"🥇", Threshold:1000},
+    {BadgeKey:"legend",    Name:"Legend",         Icon:"👑", Threshold:2000}
+);
+
+// Deduction reason options
+ClearCollect(colDeductReasons,
+    {Reason:"Disrespect"},
+    {Reason:"Lying"},
+    {Reason:"Not listening"},
+    {Reason:"Physical aggression"},
+    {Reason:"Bad attitude"},
+    {Reason:"Property damage"},
+    {Reason:"Screen overuse"}
+);
+
+// Bonus reason options
+ClearCollect(colBonusReasons,
+    {Reason:"Initiative"},
+    {Reason:"Kindness"},
+    {Reason:"Attitude"},
+    {Reason:"Honesty"},
+    {Reason:"Extra effort"}
+);
+
+// ── 2. Mode & auth state ─────────────────────────────────────
+// gblMode: "parent" | "kid" | ""
+Set(gblMode, "");
+Set(gblParentUnlocked, false);   // true when PIN verified in parent portal
+Set(gblCurrentFamily, Blank());  // Families record
+Set(gblCurrentChild, Blank());   // Children record
+Set(gblFamilySettings, Blank()); // FamilySettings record
+Set(gblSyncInProgress, false);
+
+// ── 3. Load local cache (offline support) ────────────────────
+// These calls restore collections saved on the device from the last session.
+// The 'true' parameter means: if no saved data exists, start with empty collection.
+LoadData(colChoresLocal,       "cache_chores",       true);
+LoadData(colRewardsLocal,      "cache_rewards",      true);
+LoadData(colChildrenLocal,     "cache_children",     true);
+LoadData(colDailyStatusLocal,  "cache_daily_status", true);
+LoadData(colLedgerLocal,       "cache_ledger",       true);
+LoadData(colRedemptionsLocal,  "cache_redemptions",  true);
+LoadData(colBadgesLocal,       "cache_badges",       true);
+LoadData(colPendingSync,       "cache_pending_sync", true);
+
+// ── 4. If online and already logged in as parent, refresh data ─
+// (User identity available via Office365Users connector)
+If(Connection.Connected,
+    // Try to identify current user's family
+    With({
+        userEmail: Lower(Office365Users.MyProfileV2().mail)
+    },
+        With({
+            family: LookUp(Families, Lower(OwnerEmail) = userEmail)
+        },
+            If(!IsBlank(family),
+                // Set family context
+                Set(gblCurrentFamily, family);
+                Set(gblMode, "parent");
+
+                // Load family settings
+                Set(gblFamilySettings,
+                    LookUp(FamilySettings, FamilyID = family.ID));
+
+                // Refresh all caches
+                ClearCollect(colChildrenLocal,
+                    Filter(Children, FamilyID = family.ID, IsActive = true));
+                SaveData(colChildrenLocal, "cache_children");
+
+                ClearCollect(colChoresLocal,
+                    Filter(ChoreCatalog, FamilyID = family.ID, IsActive = true));
+                SaveData(colChoresLocal, "cache_chores");
+
+                ClearCollect(colRewardsLocal,
+                    Filter(RewardCatalog, FamilyID = family.ID, IsActive = true));
+                SaveData(colRewardsLocal, "cache_rewards");
+
+                // Navigate to child select if no child chosen yet
+                If(IsBlank(gblCurrentChild),
+                    Navigate(ChildSelectScreen, ScreenTransition.Fade),
+                    Navigate(HomeScreen, ScreenTransition.Fade)
+                )
+            // else: no family found, go to login
+            )
+        )
+    )
+// offline and have cached data → go to home if child is set
+, !IsBlank(gblCurrentChild),
+    Navigate(HomeScreen, ScreenTransition.Fade)
+// no data at all → go to login
+,
+    Navigate(LoginScreen, ScreenTransition.Fade)
+);
+
+// ── 5. Flush pending sync queue if online ────────────────────
+// (Also handled by timer on HomeScreen, but do one pass at startup)
+If(Connection.Connected && CountIf(colPendingSync, Synced = false) > 0,
+    Set(gblSyncInProgress, true);
+    ForAll(
+        Filter(colPendingSync, Synced = false),
+        Switch(ThisRecord.Operation,
+            "TOGGLE_CHORE",
+                // Upsert DailyStatus
+                With({
+                    existing: LookUp(DailyStatus,
+                        ChildID = ThisRecord.ChildID &&
+                        ChoreID = ThisRecord.ChoreID &&
+                        DateKey = ThisRecord.DateKey)
+                },
+                    If(IsBlank(existing),
+                        Patch(DailyStatus, Defaults(DailyStatus), {
+                            Title:       Text(ThisRecord.ChildID) & "_" & Text(ThisRecord.ChoreID) & "_" & Text(ThisRecord.DateKey, "yyyy-mm-dd"),
+                            ChildID:     ThisRecord.ChildID,
+                            ChoreID:     ThisRecord.ChoreID,
+                            DateKey:     ThisRecord.DateKey,
+                            IsCompleted: ThisRecord.IsCompleted,
+                            Status:      ThisRecord.Status
+                        }),
+                        Patch(DailyStatus, existing, {
+                            IsCompleted: ThisRecord.IsCompleted,
+                            Status:      ThisRecord.Status
+                        })
+                    )
+                ),
+
+            "POINTS_LEDGER",
+                Patch(PointsLedger, Defaults(PointsLedger), {
+                    Title:       ThisRecord.Note,
+                    FamilyID:    ThisRecord.FamilyID,
+                    ChildID:     ThisRecord.ChildID,
+                    DateKey:     ThisRecord.DateKey,
+                    EventType:   ThisRecord.EventType,
+                    RefID:       ThisRecord.RefID,
+                    PointsDelta: ThisRecord.PointsDelta,
+                    Note:        ThisRecord.Note
+                }),
+
+            "REDEEM_REWARD",
+                Patch(RewardRedemptions, Defaults(RewardRedemptions), {
+                    Title:    ThisRecord.Title,
+                    FamilyID: ThisRecord.FamilyID,
+                    ChildID:  ThisRecord.ChildID,
+                    RewardID: ThisRecord.RewardID,
+                    Cost:     ThisRecord.Cost,
+                    Status:   "requested",
+                    RedeemedDate: Now()
+                })
+        )
+    );
+    // Mark all as synced
+    UpdateIf(colPendingSync, Synced = false, {Synced: true});
+    SaveData(colPendingSync, "cache_pending_sync");
+    Set(gblSyncInProgress, false)
+);

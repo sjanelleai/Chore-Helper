@@ -1,0 +1,335 @@
+// ============================================================
+// ChoresScreen — Chore list with toggle, status, categories
+// ============================================================
+// Controls to create:
+//   rectHeader          - Rectangle (header)
+//   lblTitle            - Label "Today's Chores"
+//   btnBack             - Button "← Home"
+//   galCategories       - Gallery (horizontal, categories)
+//   galChores           - Gallery (vertical, chore cards)
+//     Each gallery item contains:
+//       rectCard         - Rectangle (card background)
+//       lblChoreName     - Label (chore title)
+//       lblPoints        - Label ("+20 pts")
+//       lblStatus        - Label (status badge: "Done" / "Pending" / "")
+//       btnToggle        - Button ("✓" or "×")
+//       rectStatusBar    - Rectangle (colored left border by status)
+//   lblEmptyState       - Label (shown when no chores)
+//   lblOfflineBanner    - Label (offline indicator)
+// ============================================================
+
+// ── Screen.OnVisible ─────────────────────────────────────────
+Set(gblSelectedCategory, "All");
+
+// Build categorized chore list with today's status merged in
+ClearCollect(colTodayChores,
+    AddColumns(
+        Filter(colChoresLocal,
+            FamilyID = gblCurrentFamily.ID && IsActive = true),
+        "StatusRecord",
+            LookUp(colDailyStatusLocal,
+                ChildID = gblCurrentChild.ID &&
+                ChoreID = ThisRecord.ID &&
+                DateKey = gblTodayDate),
+        "ChoreStatus",
+            Coalesce(
+                LookUp(colDailyStatusLocal,
+                    ChildID = gblCurrentChild.ID &&
+                    ChoreID = ThisRecord.ID &&
+                    DateKey = gblTodayDate).Status,
+                "unchecked"
+            ),
+        "IsCompleted",
+            !IsBlank(
+                LookUp(colDailyStatusLocal,
+                    ChildID = gblCurrentChild.ID &&
+                    ChoreID = ThisRecord.ID &&
+                    DateKey = gblTodayDate &&
+                    (Status = "approved" || Status = "pending")))
+    )
+);
+
+// Build unique category list
+ClearCollect(colCategories,
+    {Name:"All"});
+ForAll(
+    Distinct(
+        Filter(colChoresLocal, FamilyID = gblCurrentFamily.ID && IsActive = true),
+        Category),
+    Collect(colCategories, {Name: Result})
+);
+
+// ── Category gallery filter variable ─────────────────────────
+// galCategories shows colCategories
+// galCategories.Items:
+colCategories
+
+// ── galCategories item — lblCategoryName.Text ─────────────────
+ThisItem.Name
+
+// ── galCategories item — rectCatBg.Fill ──────────────────────
+If(ThisItem.Name = gblSelectedCategory,
+    gblColors.Primary,
+    gblColors.Background)
+
+// ── galCategories item — lblCategoryName.Color ───────────────
+If(ThisItem.Name = gblSelectedCategory,
+    gblColors.Card,
+    gblColors.Text)
+
+// ── galCategories item — OnSelect ────────────────────────────
+Set(gblSelectedCategory, ThisItem.Name)
+
+// ── galChores.Items ──────────────────────────────────────────
+If(gblSelectedCategory = "All",
+    colTodayChores,
+    Filter(colTodayChores, Category = gblSelectedCategory)
+)
+
+// ── galChores item — rectCard.Fill ───────────────────────────
+gblColors.Card
+
+// ── galChores item — rectCard.BorderColor ────────────────────
+gblColors.Border
+
+// ── galChores item — rectStatusBar.Fill (left border stripe) ─
+Switch(ThisItem.ChoreStatus,
+    "approved",  gblColors.Success,
+    "pending",   gblColors.Warning,
+               gblColors.Border
+)
+
+// ── galChores item — lblChoreName.Text ───────────────────────
+ThisItem.Title
+
+// ── galChores item — lblChoreName.Color ──────────────────────
+If(ThisItem.ChoreStatus = "approved",
+    gblColors.TextMuted,
+    gblColors.Text)
+
+// ── galChores item — lblChoreName.Font ───────────────────────
+If(ThisItem.ChoreStatus = "approved",
+    Font.'Segoe UI',   // normal weight
+    Font.'Segoe UI'    // same — or use bold variant if desired
+)
+
+// ── galChores item — lblPoints.Text ──────────────────────────
+"+" & Text(ThisItem.Points) & " pts"
+
+// ── galChores item — lblPoints.Color ─────────────────────────
+gblColors.Primary
+
+// ── galChores item — lblStatus.Text ──────────────────────────
+Switch(ThisItem.ChoreStatus,
+    "approved", "✓ Done",
+    "pending",  "⏳ Pending",
+    ""
+)
+
+// ── galChores item — lblStatus.Color ─────────────────────────
+Switch(ThisItem.ChoreStatus,
+    "approved", gblColors.Success,
+    "pending",  gblColors.Warning,
+               Transparent
+)
+
+// ── galChores item — btnToggle.Text ──────────────────────────
+Switch(ThisItem.ChoreStatus,
+    "approved", "✓",
+    "pending",  "⏳",
+    "○"
+)
+
+// ── galChores item — btnToggle.Fill ──────────────────────────
+Switch(ThisItem.ChoreStatus,
+    "approved", gblColors.Success,
+    "pending",  gblColors.Warning,
+               gblColors.Border
+)
+
+// ── galChores item — btnToggle.Color ─────────────────────────
+If(ThisItem.ChoreStatus = "unchecked",
+    gblColors.TextMuted,
+    gblColors.Card)
+
+// ── galChores item — btnToggle.OnSelect ──────────────────────
+// Determine new status based on approval settings
+With({
+    requiresApproval:
+        If(ThisItem.ApprovalOverride = "always", true,
+           ThisItem.ApprovalOverride = "never",  false,
+           // "inherit" — check family setting
+           gblFamilySettings.ApprovalMode = "always", true,
+           gblFamilySettings.ApprovalMode = "never",  false,
+           // "smart" mode
+           gblFamilySettings.ApprovalMode = "smart" &&
+               ThisItem.Points >= gblFamilySettings.ApprovalThreshold, true,
+           false
+        ),
+
+    currentStatus: ThisItem.ChoreStatus
+},
+    With({
+        newStatus:
+            If(currentStatus = "unchecked",
+                If(requiresApproval, "pending", "approved"),
+            currentStatus = "pending",
+                "unchecked",   // kid can cancel a pending submission
+            currentStatus = "approved" && gblMode = "parent",
+                "unchecked",   // parent can uncheck
+            // kid tapping approved — ignore (or show message)
+            currentStatus
+            ),
+
+        pointsDelta:
+            If(currentStatus = "unchecked" && !requiresApproval,
+                ThisItem.Points,              // earning points immediately
+            currentStatus = "approved" && gblMode = "parent",
+                -ThisItem.Points,             // reversing points
+            0                                 // pending state doesn't move points yet
+            )
+    },
+        If(newStatus <> currentStatus,
+            // ── Optimistic local update ──
+            // Update or insert daily status locally
+            If(IsBlank(
+                LookUp(colDailyStatusLocal,
+                    ChildID = gblCurrentChild.ID &&
+                    ChoreID = ThisItem.ID &&
+                    DateKey = gblTodayDate)),
+
+                Collect(colDailyStatusLocal, {
+                    ChildID:     gblCurrentChild.ID,
+                    ChoreID:     ThisItem.ID,
+                    DateKey:     gblTodayDate,
+                    IsCompleted: newStatus <> "unchecked",
+                    Status:      newStatus
+                }),
+
+                UpdateIf(colDailyStatusLocal,
+                    ChildID = gblCurrentChild.ID &&
+                    ChoreID = ThisItem.ID &&
+                    DateKey = gblTodayDate,
+                    {
+                        IsCompleted: newStatus <> "unchecked",
+                        Status:      newStatus
+                    })
+            );
+            SaveData(colDailyStatusLocal, "cache_daily_status");
+
+            // Update ledger locally if points changed
+            If(pointsDelta <> 0,
+                Collect(colLedgerLocal, {
+                    FamilyID:    gblCurrentFamily.ID,
+                    ChildID:     gblCurrentChild.ID,
+                    DateKey:     gblTodayDate,
+                    EventType:   If(pointsDelta > 0, "chore_complete", "chore_uncheck"),
+                    RefID:       ThisItem.ID,
+                    PointsDelta: pointsDelta,
+                    Note:        ThisItem.Title
+                });
+                SaveData(colLedgerLocal, "cache_ledger");
+                Set(gblPointsBalance, gblPointsBalance + pointsDelta)
+            );
+
+            // Queue for sync
+            Collect(colPendingSync, {
+                Operation:   "TOGGLE_CHORE",
+                ChildID:     gblCurrentChild.ID,
+                FamilyID:    gblCurrentFamily.ID,
+                ChoreID:     ThisItem.ID,
+                DateKey:     gblTodayDate,
+                IsCompleted: newStatus <> "unchecked",
+                Status:      newStatus,
+                Synced:      false
+            });
+            If(pointsDelta <> 0,
+                Collect(colPendingSync, {
+                    Operation:   "POINTS_LEDGER",
+                    FamilyID:    gblCurrentFamily.ID,
+                    ChildID:     gblCurrentChild.ID,
+                    DateKey:     gblTodayDate,
+                    EventType:   If(pointsDelta > 0, "chore_complete", "chore_uncheck"),
+                    RefID:       ThisItem.ID,
+                    PointsDelta: pointsDelta,
+                    Note:        ThisItem.Title,
+                    Synced:      false
+                })
+            );
+            SaveData(colPendingSync, "cache_pending_sync");
+
+            // Refresh the display collection
+            ClearCollect(colTodayChores,
+                AddColumns(
+                    Filter(colChoresLocal, FamilyID = gblCurrentFamily.ID && IsActive = true),
+                    "ChoreStatus",
+                        Coalesce(
+                            LookUp(colDailyStatusLocal,
+                                ChildID = gblCurrentChild.ID &&
+                                ChoreID = ThisRecord.ID &&
+                                DateKey = gblTodayDate).Status,
+                            "unchecked"),
+                    "IsCompleted",
+                        !IsBlank(LookUp(colDailyStatusLocal,
+                            ChildID = gblCurrentChild.ID &&
+                            ChoreID = ThisRecord.ID &&
+                            DateKey = gblTodayDate &&
+                            (Status = "approved" || Status = "pending")))
+                )
+            );
+
+            // If online, also write directly to SharePoint right now
+            If(Connection.Connected,
+                With({
+                    existing: LookUp(DailyStatus,
+                        ChildID = gblCurrentChild.ID &&
+                        ChoreID = ThisItem.ID &&
+                        DateKey = gblTodayDate)
+                },
+                    If(IsBlank(existing),
+                        Patch(DailyStatus, Defaults(DailyStatus), {
+                            Title:       Text(gblCurrentChild.ID) & "_" & Text(ThisItem.ID),
+                            ChildID:     gblCurrentChild.ID,
+                            ChoreID:     ThisItem.ID,
+                            DateKey:     gblTodayDate,
+                            IsCompleted: newStatus <> "unchecked",
+                            Status:      newStatus
+                        }),
+                        Patch(DailyStatus, existing, {
+                            IsCompleted: newStatus <> "unchecked",
+                            Status:      newStatus
+                        })
+                    )
+                );
+                If(pointsDelta <> 0,
+                    Patch(PointsLedger, Defaults(PointsLedger), {
+                        Title:       ThisItem.Title,
+                        FamilyID:    gblCurrentFamily.ID,
+                        ChildID:     gblCurrentChild.ID,
+                        DateKey:     gblTodayDate,
+                        EventType:   If(pointsDelta > 0, "chore_complete", "chore_uncheck"),
+                        RefID:       ThisItem.ID,
+                        PointsDelta: pointsDelta,
+                        Note:        ThisItem.Title
+                    })
+                );
+                // Remove successfully-synced items from queue
+                RemoveIf(colPendingSync,
+                    Operation = "TOGGLE_CHORE" &&
+                    ChildID = gblCurrentChild.ID &&
+                    ChoreID = ThisItem.ID &&
+                    Synced = false)
+            )
+        )
+    )
+);
+
+// ── lblEmptyState.Visible ─────────────────────────────────────
+CountRows(galChores.AllItems) = 0
+
+// ── lblEmptyState.Text ────────────────────────────────────────
+"No chores for " &
+If(gblSelectedCategory = "All", "today", "the " & gblSelectedCategory & " category") & "!"
+
+// ── btnBack.OnSelect ─────────────────────────────────────────
+Navigate(HomeScreen, ScreenTransition.UnCover)

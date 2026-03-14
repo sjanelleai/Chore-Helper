@@ -1,0 +1,226 @@
+// ============================================================
+// RewardsScreen — Reward shop
+// Shows available rewards, current balance, and redeem button.
+// ============================================================
+// Controls to create:
+//   rectHeader          - Rectangle (header)
+//   lblTitle            - Label "Rewards Shop"
+//   btnBack             - Button "← Home"
+//   cardBalance         - Rectangle
+//   lblBalanceValue     - Label (current points)
+//   lblBalanceLabel     - Label "points available"
+//   galRewCategories    - Gallery (horizontal category filter)
+//   galRewards          - Gallery (vertical reward cards)
+//     Each item:
+//       rectCard         - Rectangle
+//       lblRewardName    - Label
+//       lblCost          - Label "1,200 pts"
+//       lblAffordable    - Label "Need 500 more" OR hidden
+//       btnRedeem        - Button "Redeem"
+//   lblEmptyState       - Label
+//   dlgConfirm          - (use a visible/hidden overlay rectangle + labels + buttons)
+// ============================================================
+
+// ── Screen.OnVisible ─────────────────────────────────────────
+Set(gblSelectedRewCategory, "All");
+Set(gblRedeemTarget, Blank());   // reward being confirmed
+
+ClearCollect(colRewCategories, {Name:"All"});
+ForAll(
+    Distinct(
+        Filter(colRewardsLocal, FamilyID = gblCurrentFamily.ID && IsActive = true),
+        Category),
+    Collect(colRewCategories, {Name: Result})
+);
+
+// ── lblBalanceValue.Text ──────────────────────────────────────
+Text(gblPointsBalance, "[$-en]#,###,##0")
+
+// ── lblBalanceValue.Color ─────────────────────────────────────
+gblColors.Primary
+
+// ── lblBalanceLabel.Text ──────────────────────────────────────
+"points available"
+
+// ── galRewCategories.Items ────────────────────────────────────
+colRewCategories
+
+// ── galRewCategories item — rectCatBg.Fill ────────────────────
+If(ThisItem.Name = gblSelectedRewCategory,
+    gblColors.Primary,
+    gblColors.Background)
+
+// ── galRewCategories item — lblCatName.Color ──────────────────
+If(ThisItem.Name = gblSelectedRewCategory,
+    gblColors.Card,
+    gblColors.Text)
+
+// ── galRewCategories item — OnSelect ──────────────────────────
+Set(gblSelectedRewCategory, ThisItem.Name)
+
+// ── galRewards.Items ──────────────────────────────────────────
+If(gblSelectedRewCategory = "All",
+    Filter(colRewardsLocal, FamilyID = gblCurrentFamily.ID && IsActive = true),
+    Filter(colRewardsLocal,
+        FamilyID = gblCurrentFamily.ID &&
+        IsActive = true &&
+        Category = gblSelectedRewCategory)
+)
+
+// ── galRewards item — rectCard.Fill ───────────────────────────
+gblColors.Card
+
+// ── galRewards item — rectCard.BorderColor ────────────────────
+If(gblPointsBalance >= ThisItem.Cost,
+    gblColors.Success,
+    gblColors.Border)
+
+// ── galRewards item — lblRewardName.Text ──────────────────────
+ThisItem.Title
+
+// ── galRewards item — lblRewardName.Color ─────────────────────
+gblColors.Text
+
+// ── galRewards item — lblCost.Text ────────────────────────────
+Text(ThisItem.Cost, "[$-en]#,###,##0") & " pts"
+
+// ── galRewards item — lblCost.Color ───────────────────────────
+gblColors.Primary
+
+// ── galRewards item — lblAffordable.Visible ───────────────────
+gblPointsBalance < ThisItem.Cost
+
+// ── galRewards item — lblAffordable.Text ──────────────────────
+"Need " & Text(ThisItem.Cost - gblPointsBalance, "[$-en]#,###,##0") & " more pts"
+
+// ── galRewards item — lblAffordable.Color ─────────────────────
+gblColors.Danger
+
+// ── galRewards item — btnRedeem.Text ──────────────────────────
+If(ThisItem.RequiresApproval, "Request", "Redeem")
+
+// ── galRewards item — btnRedeem.Fill ──────────────────────────
+If(gblPointsBalance >= ThisItem.Cost,
+    gblColors.Primary,
+    gblColors.Border)
+
+// ── galRewards item — btnRedeem.Color ─────────────────────────
+gblColors.Card
+
+// ── galRewards item — btnRedeem.DisplayMode ───────────────────
+If(gblPointsBalance >= ThisItem.Cost,
+    DisplayMode.Edit,
+    DisplayMode.Disabled)
+
+// ── galRewards item — btnRedeem.OnSelect ──────────────────────
+// Show confirmation overlay
+Set(gblRedeemTarget, ThisItem);
+Set(gblShowRedeemConfirm, true)
+
+// ── Confirmation Overlay ─────────────────────────────────────
+// Create a semi-transparent overlay rectangle + card + buttons.
+// Use a group with Visible = gblShowRedeemConfirm
+
+// rectOverlay.Fill:
+RGBA(0, 0, 0, 0.5)
+
+// rectConfirmCard.Fill:
+gblColors.Card
+
+// lblConfirmTitle.Text:
+"Confirm Redemption"
+
+// lblConfirmMsg.Text:
+"Redeem "" & gblRedeemTarget.Title & "" for " &
+Text(gblRedeemTarget.Cost, "[$-en]#,###,##0") & " points?" &
+If(gblRedeemTarget.RequiresApproval,
+    " (Requires parent approval)",
+    "")
+
+// btnConfirmYes.Text:
+If(gblRedeemTarget.RequiresApproval, "Request", "Redeem")
+
+// btnConfirmYes.OnSelect:
+// Deduct points locally
+Collect(colLedgerLocal, {
+    FamilyID:    gblCurrentFamily.ID,
+    ChildID:     gblCurrentChild.ID,
+    DateKey:     gblTodayDate,
+    EventType:   "purchase",
+    RefID:       gblRedeemTarget.ID,
+    PointsDelta: -gblRedeemTarget.Cost,
+    Note:        "Redeemed: " & gblRedeemTarget.Title
+});
+SaveData(colLedgerLocal, "cache_ledger");
+Set(gblPointsBalance, gblPointsBalance - gblRedeemTarget.Cost);
+
+// Add to redemptions cache
+Collect(colRedemptionsLocal, {
+    FamilyID:     gblCurrentFamily.ID,
+    ChildID:      gblCurrentChild.ID,
+    RewardID:     gblRedeemTarget.ID,
+    RewardTitle:  gblRedeemTarget.Title,
+    Cost:         gblRedeemTarget.Cost,
+    Status:       If(gblRedeemTarget.RequiresApproval, "requested", "approved"),
+    RedeemedDate: Now()
+});
+SaveData(colRedemptionsLocal, "cache_redemptions");
+
+// Queue for sync
+Collect(colPendingSync, {
+    Operation:  "POINTS_LEDGER",
+    FamilyID:   gblCurrentFamily.ID,
+    ChildID:    gblCurrentChild.ID,
+    DateKey:    gblTodayDate,
+    EventType:  "purchase",
+    RefID:      gblRedeemTarget.ID,
+    PointsDelta: -gblRedeemTarget.Cost,
+    Note:       "Redeemed: " & gblRedeemTarget.Title,
+    Synced:     false
+});
+Collect(colPendingSync, {
+    Operation:  "REDEEM_REWARD",
+    FamilyID:   gblCurrentFamily.ID,
+    ChildID:    gblCurrentChild.ID,
+    RewardID:   gblRedeemTarget.ID,
+    Title:      gblCurrentChild.Title & " redeemed " & gblRedeemTarget.Title,
+    Cost:       gblRedeemTarget.Cost,
+    Synced:     false
+});
+SaveData(colPendingSync, "cache_pending_sync");
+
+// Write to SharePoint immediately if online
+If(Connection.Connected,
+    Patch(PointsLedger, Defaults(PointsLedger), {
+        Title:       "Redeemed: " & gblRedeemTarget.Title,
+        FamilyID:    gblCurrentFamily.ID,
+        ChildID:     gblCurrentChild.ID,
+        DateKey:     gblTodayDate,
+        EventType:   "purchase",
+        RefID:       gblRedeemTarget.ID,
+        PointsDelta: -gblRedeemTarget.Cost,
+        Note:        "Redeemed: " & gblRedeemTarget.Title
+    });
+    Patch(RewardRedemptions, Defaults(RewardRedemptions), {
+        Title:       gblCurrentChild.Title & " redeemed " & gblRedeemTarget.Title,
+        FamilyID:    gblCurrentFamily.ID,
+        ChildID:     gblCurrentChild.ID,
+        RewardID:    gblRedeemTarget.ID,
+        Cost:        gblRedeemTarget.Cost,
+        Status:      If(gblRedeemTarget.RequiresApproval, "requested", "approved"),
+        RedeemedDate: Now()
+    })
+);
+
+Set(gblShowRedeemConfirm, false);
+Set(gblRedeemTarget, Blank());
+
+// btnConfirmNo.Text:
+"Cancel"
+
+// btnConfirmNo.OnSelect:
+Set(gblShowRedeemConfirm, false);
+Set(gblRedeemTarget, Blank())
+
+// ── btnBack.OnSelect ─────────────────────────────────────────
+Navigate(HomeScreen, ScreenTransition.UnCover)

@@ -1,0 +1,272 @@
+// ============================================================
+// HomeScreen — Dashboard
+// Shows greeting, current points balance, today's progress,
+// and quick-nav buttons to Chores / Rewards.
+// ============================================================
+// Controls to create:
+//   rectHeader        - Rectangle (header bar)
+//   lblGreeting       - Label  "Good morning, Emma!"
+//   lblModeTag        - Label  "Kid Mode" / "Parent Mode"
+//   btnSwitchMode     - Button (parent only: switch child / go to parent panel)
+//   cardPoints        - Rectangle (points card background)
+//   lblPointsValue    - Label  e.g. "1,250"
+//   lblPointsLabel    - Label  "points"
+//   lblLifetimeLabel  - Label  "lifetime earned"
+//   lblLifetimeValue  - Label  e.g. "4,820"
+//   progBarBg         - Rectangle (gray progress bar track)
+//   progBarFill       - Rectangle (colored fill, width driven by formula)
+//   lblProgressText   - Label  "3 of 5 chores done today"
+//   btnChores         - Button "Chores"
+//   btnRewards        - Button "Rewards"
+//   btnBadges         - Button "Badges"
+//   lblOfflineBanner  - Label  (visible when offline)
+//   tmrSync           - Timer  (30-second sync loop)
+//   lblSyncing        - Label  "Syncing..." (visible during sync)
+// ============================================================
+
+// ── Helper computed values (set in Screen.OnVisible) ─────────
+// Put this in HomeScreen.OnVisible:
+
+Set(gblPointsBalance,
+    Sum(
+        Filter(colLedgerLocal, ChildID = gblCurrentChild.ID),
+        PointsDelta
+    )
+);
+Set(gblLifetimePoints,
+    Sum(
+        Filter(colLedgerLocal, ChildID = gblCurrentChild.ID && PointsDelta > 0),
+        PointsDelta
+    )
+);
+Set(gblTodayChoresTotal,
+    CountRows(Filter(colChoresLocal, IsActive = true))
+);
+Set(gblTodayChoresDone,
+    CountRows(Filter(colDailyStatusLocal,
+        ChildID = gblCurrentChild.ID &&
+        DateKey = gblTodayDate &&
+        (Status = "approved" || Status = "pending")))
+);
+
+// Refresh from SharePoint if online
+If(Connection.Connected,
+    // Refresh ledger
+    ClearCollect(colLedgerLocal,
+        Filter(PointsLedger, ChildID = gblCurrentChild.ID));
+    SaveData(colLedgerLocal, "cache_ledger");
+
+    // Refresh today's status
+    ClearCollect(colDailyStatusLocal,
+        Filter(DailyStatus,
+            ChildID = gblCurrentChild.ID &&
+            DateKey = gblTodayDate));
+    SaveData(colDailyStatusLocal, "cache_daily_status");
+
+    // Re-compute after refresh
+    Set(gblPointsBalance,
+        Sum(Filter(colLedgerLocal, ChildID = gblCurrentChild.ID), PointsDelta));
+    Set(gblLifetimePoints,
+        Sum(Filter(colLedgerLocal, ChildID = gblCurrentChild.ID && PointsDelta > 0), PointsDelta));
+    Set(gblTodayChoresDone,
+        CountRows(Filter(colDailyStatusLocal,
+            ChildID = gblCurrentChild.ID &&
+            DateKey = gblTodayDate &&
+            (Status = "approved" || Status = "pending"))))
+);
+
+// ── rectHeader.Fill ───────────────────────────────────────────
+gblColors.Primary
+
+// ── lblGreeting.Text ──────────────────────────────────────────
+"Good " &
+If(Hour(Now()) < 12, "morning",
+   Hour(Now()) < 17, "afternoon",
+   "evening") &
+", " & gblCurrentChild.Title & "!"
+
+// ── lblGreeting.Color ─────────────────────────────────────────
+gblColors.Card
+
+// ── lblModeTag.Text ───────────────────────────────────────────
+If(gblMode = "parent", "Parent Mode", "Kid Mode")
+
+// ── lblModeTag.Color ──────────────────────────────────────────
+If(gblMode = "parent", gblColors.Warning, RGBA(255,255,255,0.8))
+
+// ── btnSwitchMode.Visible ─────────────────────────────────────
+gblMode = "parent"
+
+// ── btnSwitchMode.Text ────────────────────────────────────────
+"⚙ Parent Panel"
+
+// ── btnSwitchMode.OnSelect ────────────────────────────────────
+Navigate(ParentPanelScreen, ScreenTransition.Cover)
+
+// ── cardPoints.Fill ───────────────────────────────────────────
+gblColors.Primary
+
+// ── cardPoints.RadiusTopLeft/TopRight/BottomLeft/BottomRight ──
+16
+
+// ── lblPointsValue.Text ───────────────────────────────────────
+Text(gblPointsBalance, "[$-en]#,###,##0")
+
+// ── lblPointsValue.Color ──────────────────────────────────────
+gblColors.Card
+
+// ── lblPointsValue.Size ───────────────────────────────────────
+48
+
+// ── lblPointsLabel.Text ───────────────────────────────────────
+"points available"
+
+// ── lblPointsLabel.Color ──────────────────────────────────────
+RGBA(255,255,255,0.8)
+
+// ── lblLifetimeValue.Text ─────────────────────────────────────
+Text(gblLifetimePoints, "[$-en]#,###,##0") & " lifetime"
+
+// ── lblLifetimeValue.Color ────────────────────────────────────
+RGBA(255,255,255,0.7)
+
+// ── progBarBg.Fill ────────────────────────────────────────────
+RGBA(255,255,255,0.2)
+
+// ── progBarBg.Height ──────────────────────────────────────────
+8
+
+// ── progBarFill.Fill ──────────────────────────────────────────
+gblColors.Success
+
+// ── progBarFill.Width ─────────────────────────────────────────
+// Drive width proportionally (assume progBarBg is 300px wide)
+If(gblTodayChoresTotal = 0, 0,
+    (gblTodayChoresDone / gblTodayChoresTotal) * progBarBg.Width
+)
+
+// ── progBarFill.Height ────────────────────────────────────────
+8
+
+// ── lblProgressText.Text ──────────────────────────────────────
+Text(gblTodayChoresDone) & " of " & Text(gblTodayChoresTotal) &
+" chores done today"
+
+// ── lblProgressText.Color ─────────────────────────────────────
+gblColors.TextMuted
+
+// ── btnChores.Text ────────────────────────────────────────────
+"✅  Chores"
+
+// ── btnChores.Fill ────────────────────────────────────────────
+gblColors.Primary
+
+// ── btnChores.Color ───────────────────────────────────────────
+gblColors.Card
+
+// ── btnChores.OnSelect ────────────────────────────────────────
+Navigate(ChoresScreen, ScreenTransition.Cover)
+
+// ── btnRewards.Text ───────────────────────────────────────────
+"🎁  Rewards"
+
+// ── btnRewards.Fill ───────────────────────────────────────────
+gblColors.Warning
+
+// ── btnRewards.Color ──────────────────────────────────────────
+gblColors.Card
+
+// ── btnRewards.OnSelect ───────────────────────────────────────
+Navigate(RewardsScreen, ScreenTransition.Cover)
+
+// ── btnBadges.Text ────────────────────────────────────────────
+"🏆  Badges"
+
+// ── btnBadges.Fill ────────────────────────────────────────────
+gblColors.Success
+
+// ── btnBadges.Color ───────────────────────────────────────────
+gblColors.Card
+
+// ── btnBadges.OnSelect ────────────────────────────────────────
+Navigate(BadgesScreen, ScreenTransition.Cover)
+
+// ── lblOfflineBanner.Visible ──────────────────────────────────
+!Connection.Connected
+
+// ── lblOfflineBanner.Text ─────────────────────────────────────
+"You are offline — changes will sync when reconnected"
+
+// ── lblOfflineBanner.Fill ─────────────────────────────────────
+gblColors.Warning
+
+// ── lblOfflineBanner.Color ────────────────────────────────────
+gblColors.Card
+
+// ── lblSyncing.Visible ────────────────────────────────────────
+gblSyncInProgress
+
+// ── lblSyncing.Text ───────────────────────────────────────────
+"Syncing..."
+
+// ── tmrSync (Timer control) ───────────────────────────────────
+// Duration: 30000  (30 seconds)
+// Repeat:   true
+// AutoStart: true
+// OnTimerEnd:
+If(Connection.Connected && CountIf(colPendingSync, Synced = false) > 0,
+    Set(gblSyncInProgress, true);
+    ForAll(
+        Filter(colPendingSync, Synced = false),
+        Switch(ThisRecord.Operation,
+            "TOGGLE_CHORE",
+                With({
+                    existing: LookUp(DailyStatus,
+                        ChildID = ThisRecord.ChildID &&
+                        ChoreID = ThisRecord.ChoreID &&
+                        DateKey = ThisRecord.DateKey)
+                },
+                    If(IsBlank(existing),
+                        Patch(DailyStatus, Defaults(DailyStatus), {
+                            Title:       Text(ThisRecord.ChildID) & "_" & Text(ThisRecord.ChoreID),
+                            ChildID:     ThisRecord.ChildID,
+                            ChoreID:     ThisRecord.ChoreID,
+                            DateKey:     ThisRecord.DateKey,
+                            IsCompleted: ThisRecord.IsCompleted,
+                            Status:      ThisRecord.Status
+                        }),
+                        Patch(DailyStatus, existing, {
+                            IsCompleted: ThisRecord.IsCompleted,
+                            Status:      ThisRecord.Status
+                        })
+                    )
+                ),
+
+            "POINTS_LEDGER",
+                Patch(PointsLedger, Defaults(PointsLedger), {
+                    Title:       ThisRecord.Note,
+                    FamilyID:    ThisRecord.FamilyID,
+                    ChildID:     ThisRecord.ChildID,
+                    DateKey:     gblTodayDate,
+                    EventType:   ThisRecord.EventType,
+                    RefID:       ThisRecord.RefID,
+                    PointsDelta: ThisRecord.PointsDelta,
+                    Note:        ThisRecord.Note
+                }),
+
+            "REDEEM_REWARD",
+                Patch(RewardRedemptions, Defaults(RewardRedemptions), {
+                    Title:       ThisRecord.Title,
+                    FamilyID:    ThisRecord.FamilyID,
+                    ChildID:     ThisRecord.ChildID,
+                    RewardID:    ThisRecord.RewardID,
+                    Cost:        ThisRecord.Cost,
+                    Status:      "requested",
+                    RedeemedDate: Now()
+                })
+        )
+    );
+    UpdateIf(colPendingSync, Synced = false, {Synced: true});
+    SaveData(colPendingSync, "cache_pending_sync");
+    Set(gblSyncInProgress, false)
+)

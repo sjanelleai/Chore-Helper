@@ -1,0 +1,208 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "_description": "Chore Helper — Daily Summary Email Flow. Import this into Power Automate via My Flows → Import. Reconnect SharePoint and Office 365 Outlook connections after import.",
+  "_setup": [
+    "1. Import this flow in Power Automate",
+    "2. Update the SharePoint Site URL in all SharePoint steps",
+    "3. Reconnect the Office 365 Outlook connection",
+    "4. Set the recurrence to your preferred time (default: 8:00 PM daily)",
+    "5. Turn the flow on"
+  ],
+  "triggers": {
+    "Recurrence": {
+      "type": "Recurrence",
+      "recurrence": {
+        "frequency": "Day",
+        "interval": 1,
+        "startTime": "2024-01-01T20:00:00Z",
+        "timeZone": "Eastern Standard Time"
+      }
+    }
+  },
+  "actions": {
+    "Get_Families_with_summary_enabled": {
+      "type": "ApiConnection",
+      "inputs": {
+        "host": {
+          "connection": {
+            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+          }
+        },
+        "method": "get",
+        "path": "/datasets/@{encodeURIComponent(encodeURIComponent('YOUR_SHAREPOINT_SITE_URL'))}/tables/@{encodeURIComponent(encodeURIComponent('FamilySettings'))}/items",
+        "queries": {
+          "$filter": "DailySummaryEnabled eq 1",
+          "$select": "FamilyID,PrimaryEmail,SecondaryEmail,SummaryTime,Timezone"
+        }
+      },
+      "runAfter": {}
+    },
+    "For_each_family": {
+      "type": "Foreach",
+      "foreach": "@body('Get_Families_with_summary_enabled')?['value']",
+      "actions": {
+        "Get_family_name": {
+          "type": "ApiConnection",
+          "inputs": {
+            "host": {
+              "connection": {
+                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+              }
+            },
+            "method": "get",
+            "path": "/datasets/@{encodeURIComponent(encodeURIComponent('YOUR_SHAREPOINT_SITE_URL'))}/tables/@{encodeURIComponent(encodeURIComponent('Families'))}/items/@{items('For_each_family')?['FamilyID']}"
+          },
+          "runAfter": {}
+        },
+        "Get_children_in_family": {
+          "type": "ApiConnection",
+          "inputs": {
+            "host": {
+              "connection": {
+                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+              }
+            },
+            "method": "get",
+            "path": "/datasets/@{encodeURIComponent(encodeURIComponent('YOUR_SHAREPOINT_SITE_URL'))}/tables/@{encodeURIComponent(encodeURIComponent('Children'))}/items",
+            "queries": {
+              "$filter": "FamilyID eq @{items('For_each_family')?['FamilyID']} and IsActive eq 1",
+              "$select": "ID,Title"
+            }
+          },
+          "runAfter": {
+            "Get_family_name": ["Succeeded"]
+          }
+        },
+        "Initialize_email_body": {
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "emailBody",
+                "type": "string",
+                "value": "<h2 style='color:#6366F1'>🏠 Chore Helper Daily Summary</h2><p>Here's how your family did today!</p><hr/>"
+              }
+            ]
+          },
+          "runAfter": {
+            "Get_children_in_family": ["Succeeded"]
+          }
+        },
+        "For_each_child": {
+          "type": "Foreach",
+          "foreach": "@body('Get_children_in_family')?['value']",
+          "actions": {
+            "Get_todays_completed_chores": {
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "/datasets/@{encodeURIComponent(encodeURIComponent('YOUR_SHAREPOINT_SITE_URL'))}/tables/@{encodeURIComponent(encodeURIComponent('DailyStatus'))}/items",
+                "queries": {
+                  "$filter": "ChildID eq @{items('For_each_child')?['ID']} and DateKey eq '@{formatDateTime(utcNow(), 'yyyy-MM-dd')}' and Status eq 'approved'",
+                  "$select": "ChoreID,Status"
+                }
+              },
+              "runAfter": {}
+            },
+            "Get_todays_points": {
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "/datasets/@{encodeURIComponent(encodeURIComponent('YOUR_SHAREPOINT_SITE_URL'))}/tables/@{encodeURIComponent(encodeURIComponent('PointsLedger'))}/items",
+                "queries": {
+                  "$filter": "ChildID eq @{items('For_each_child')?['ID']} and DateKey eq '@{formatDateTime(utcNow(), 'yyyy-MM-dd')}'",
+                  "$select": "PointsDelta,EventType,Note"
+                }
+              },
+              "runAfter": {}
+            },
+            "Get_total_balance": {
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "/datasets/@{encodeURIComponent(encodeURIComponent('YOUR_SHAREPOINT_SITE_URL'))}/tables/@{encodeURIComponent(encodeURIComponent('PointsLedger'))}/items",
+                "queries": {
+                  "$filter": "ChildID eq @{items('For_each_child')?['ID']}",
+                  "$select": "PointsDelta"
+                }
+              },
+              "runAfter": {}
+            },
+            "Append_child_section_to_email": {
+              "type": "AppendToStringVariable",
+              "inputs": {
+                "name": "emailBody",
+                "value": "<div style='background:#F8FAFC;border-radius:8px;padding:16px;margin:12px 0;border-left:4px solid #6366F1'><h3 style='color:#1E293B;margin:0 0 8px'>@{items('For_each_child')?['Title']}</h3><table style='width:100%'><tr><td><b>Chores completed today:</b></td><td>@{length(body('Get_todays_completed_chores')?['value'])}</td></tr><tr><td><b>Points earned today:</b></td><td>@{string(body('Get_todays_points')?['value'])}</td></tr></table></div>"
+              },
+              "runAfter": {
+                "Get_todays_completed_chores": ["Succeeded"],
+                "Get_todays_points": ["Succeeded"],
+                "Get_total_balance": ["Succeeded"]
+              }
+            }
+          },
+          "runAfter": {
+            "Initialize_email_body": ["Succeeded"]
+          }
+        },
+        "Append_footer": {
+          "type": "AppendToStringVariable",
+          "inputs": {
+            "name": "emailBody",
+            "value": "<hr/><p style='color:#64748B;font-size:12px'>Sent by Chore Helper Power App. To change your email preferences, open the app and go to Parent Panel → Settings.</p>"
+          },
+          "runAfter": {
+            "For_each_child": ["Succeeded"]
+          }
+        },
+        "Send_summary_email": {
+          "type": "ApiConnection",
+          "inputs": {
+            "host": {
+              "connection": {
+                "name": "@parameters('$connections')['office365']['connectionId']"
+              }
+            },
+            "method": "post",
+            "path": "/v2/Mail",
+            "body": {
+              "To": "@{items('For_each_family')?['PrimaryEmail']}",
+              "Cc": "@{items('For_each_family')?['SecondaryEmail']}",
+              "Subject": "🏠 Daily Chore Summary — @{formatDateTime(utcNow(), 'MMMM d, yyyy')}",
+              "Body": "@{variables('emailBody')}",
+              "IsHtml": true
+            }
+          },
+          "runAfter": {
+            "Append_footer": ["Succeeded"]
+          }
+        }
+      },
+      "runAfter": {
+        "Get_Families_with_summary_enabled": ["Succeeded"]
+      }
+    }
+  },
+  "parameters": {
+    "$connections": {
+      "defaultValue": {},
+      "type": "Object"
+    }
+  }
+}

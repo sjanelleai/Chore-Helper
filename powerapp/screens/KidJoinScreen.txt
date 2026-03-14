@@ -1,0 +1,136 @@
+// ============================================================
+// KidJoinScreen — Kid login (family code + child PIN)
+// No Microsoft account needed for kids.
+// ============================================================
+// Controls to create:
+//   lblTitle        - Label  "Join Your Family"
+//   lblCodeLabel    - Label  "Family Code"
+//   txtFamilyCode   - Text input  (6 digits)
+//   lblPINLabel     - Label  "Your PIN"
+//   txtChildPIN     - Text input  (4 digits, password mode)
+//   btnJoin         - Button "Join"
+//   lblError        - Label  (hidden unless error)
+//   lblBack         - Label  "← Back"
+// ============================================================
+
+// ── Screen.Fill ───────────────────────────────────────────────
+gblColors.Background
+
+// ── txtFamilyCode (TextInput) ─────────────────────────────────
+// HintText:
+"123456"
+// Mode: Numbers only (set Format = Number in properties pane)
+// MaxLength: 6
+
+// ── txtChildPIN (TextInput) ───────────────────────────────────
+// HintText:
+"••••"
+// Mode: Password  ← set in properties pane
+// MaxLength: 4
+
+// ── btnJoin.Text ──────────────────────────────────────────────
+"Join"
+
+// ── btnJoin.Fill ──────────────────────────────────────────────
+gblColors.Primary
+
+// ── btnJoin.Color ─────────────────────────────────────────────
+gblColors.Card
+
+// ── btnJoin.DisplayMode ───────────────────────────────────────
+If(Len(txtFamilyCode.Text) = 6 && Len(txtChildPIN.Text) >= 4,
+    DisplayMode.Edit,
+    DisplayMode.Disabled
+)
+
+// ── btnJoin.OnSelect ──────────────────────────────────────────
+Set(gblLoginError, Blank());
+
+If(!Connection.Connected && CountRows(colChildrenLocal) = 0,
+    Set(gblLoginError, "No cached data. Connect to the internet first."),
+
+    // Look up family by code (from local cache if offline)
+    With({
+        family: If(
+            Connection.Connected,
+            LookUp(Families, FamilyCode = Trim(txtFamilyCode.Text)),
+            LookUp(colChildrenLocal, FamilyCode = Trim(txtFamilyCode.Text))
+                // Note: colChildrenLocal may not have FamilyCode; fall back to SharePoint
+        )
+    },
+        // Try online lookup if offline lookup failed
+        With({
+            resolvedFamily: If(!IsBlank(family), family,
+                If(Connection.Connected,
+                    LookUp(Families, FamilyCode = Trim(txtFamilyCode.Text)),
+                    Blank()
+                )
+            )
+        },
+            If(IsBlank(resolvedFamily),
+                Set(gblLoginError, "Family code not found. Check the code and try again."),
+
+                // Look up child by PIN within this family
+                With({
+                    child: If(Connection.Connected,
+                        LookUp(Children,
+                            FamilyID = resolvedFamily.ID &&
+                            ChildPIN = Trim(txtChildPIN.Text) &&
+                            IsActive = true),
+                        LookUp(colChildrenLocal,
+                            FamilyID = resolvedFamily.ID &&
+                            ChildPIN = Trim(txtChildPIN.Text))
+                    )
+                },
+                    If(IsBlank(child),
+                        Set(gblLoginError, "PIN not recognized. Ask a parent to check your PIN."),
+
+                        // Success — set kid context
+                        Set(gblCurrentFamily, resolvedFamily);
+                        Set(gblCurrentChild, child);
+                        Set(gblMode, "kid");
+                        Set(gblParentUnlocked, false);
+
+                        // Cache family data for offline use
+                        If(Connection.Connected,
+                            Set(gblFamilySettings,
+                                LookUp(FamilySettings, FamilyID = resolvedFamily.ID));
+
+                            ClearCollect(colChoresLocal,
+                                Filter(ChoreCatalog,
+                                    FamilyID = resolvedFamily.ID && IsActive = true));
+                            SaveData(colChoresLocal, "cache_chores");
+
+                            ClearCollect(colRewardsLocal,
+                                Filter(RewardCatalog,
+                                    FamilyID = resolvedFamily.ID && IsActive = true));
+                            SaveData(colRewardsLocal, "cache_rewards");
+
+                            // Load today's status for this child
+                            ClearCollect(colDailyStatusLocal,
+                                Filter(DailyStatus,
+                                    ChildID = child.ID &&
+                                    DateKey = gblTodayDate));
+                            SaveData(colDailyStatusLocal, "cache_daily_status")
+                        );
+
+                        Navigate(HomeScreen, ScreenTransition.Cover)
+                    )
+                )
+            )
+        )
+    )
+);
+
+// ── lblError.Visible ──────────────────────────────────────────
+!IsBlank(gblLoginError)
+
+// ── lblError.Text ─────────────────────────────────────────────
+gblLoginError
+
+// ── lblError.Color ────────────────────────────────────────────
+gblColors.Danger
+
+// ── lblBack.OnSelect ─────────────────────────────────────────
+Set(gblLoginError, Blank());
+Navigate(LoginScreen, ScreenTransition.UnCover)

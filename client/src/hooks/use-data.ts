@@ -809,22 +809,21 @@ export function useAwardBonus() {
 export function useDeductPoints() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { activeChildId, family } = useAuth();
+  const { activeChildId } = useAuth();
 
   return useMutation({
     mutationFn: async (data: { reason: string; points: number; note?: string }) => {
       if (!activeChildId) throw new Error("No child selected");
-      if (!family) throw new Error("No family");
 
-      const { error } = await supabase.from("points_ledger").insert({
-        family_id: family.familyId,
-        child_id: activeChildId,
-        event_type: "deduction",
-        points_delta: -data.points,
-        note: data.note || data.reason,
+      const { data: result, error } = await supabase.rpc("deduct_points", {
+        p_child_id: activeChildId,
+        p_points: data.points,
+        p_reason: data.note || data.reason,
       });
 
       if (error) throw error;
+      if (result?.error) throw new Error(result.error);
+
       return { pointsDelta: -data.points };
     },
     onSuccess: (data) => {

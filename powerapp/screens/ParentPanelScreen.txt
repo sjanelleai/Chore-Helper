@@ -1,0 +1,359 @@
+// ============================================================
+// ParentPanelScreen — Parent controls
+// Sections: Pending Approvals, Bonus Points, Deduct Points,
+//           Manage Chores, Manage Rewards, Family Settings
+// ============================================================
+// Controls to create:
+//   rectHeader           - Rectangle
+//   lblTitle             - Label "Parent Panel"
+//   btnBack              - Label "← Back"
+//   ── PIN Gate ──
+//   rectPINOverlay       - Rectangle (full-screen, Visible = !gblParentUnlocked)
+//   lblPINPrompt         - Label "Enter Parent PIN"
+//   txtParentPIN         - TextInput (Password mode)
+//   btnUnlockPIN         - Button "Unlock"
+//   lblPINError          - Label
+//   ── Tabs ──
+//   btnTabApprovals      - Button "Approvals (N)"
+//   btnTabBonus          - Button "Bonus"
+//   btnTabDeduct         - Button "Deduct"
+//   btnTabChores         - Button "Chores"
+//   btnTabRewards        - Button "Rewards"
+//   btnTabSettings       - Button "Settings"
+//   ── Each tab's content section, Visible = gblParentTab = "X" ──
+// ============================================================
+
+// ── Screen.OnVisible ─────────────────────────────────────────
+Set(gblParentTab, "approvals");
+
+// Load pending approvals if online
+If(Connection.Connected,
+    ClearCollect(colPendingApprovals,
+        AddColumns(
+            Filter(DailyStatus,
+                Status = "pending" &&
+                ChildID = gblCurrentChild.ID),
+            "ChoreName",
+                LookUp(colChoresLocal, ID = ThisRecord.ChoreID).Title,
+            "ChorePoints",
+                LookUp(colChoresLocal, ID = ThisRecord.ChoreID).Points
+        )
+    ),
+    // Offline: derive from local cache
+    ClearCollect(colPendingApprovals,
+        AddColumns(
+            Filter(colDailyStatusLocal,
+                Status = "pending" &&
+                ChildID = gblCurrentChild.ID),
+            "ChoreName",
+                LookUp(colChoresLocal, ID = ThisRecord.ChoreID).Title,
+            "ChorePoints",
+                LookUp(colChoresLocal, ID = ThisRecord.ChoreID).Points
+        )
+    )
+);
+
+// ── PIN GATE ─────────────────────────────────────────────────
+
+// rectPINOverlay.Visible:
+!gblParentUnlocked
+
+// txtParentPIN (Password mode, MaxLength: 6)
+
+// btnUnlockPIN.OnSelect:
+If(txtParentPIN.Text = gblFamilySettings.ParentPortalPIN,
+    Set(gblParentUnlocked, true),
+    Set(gblPINError, "Incorrect PIN. Try again.")
+);
+Reset(txtParentPIN)
+
+// lblPINError.Visible:
+!IsBlank(gblPINError)
+
+// lblPINError.Text:
+gblPINError
+
+// ── TAB NAVIGATION ───────────────────────────────────────────
+
+// Tab button labels
+// btnTabApprovals.Text:
+"Approvals (" & Text(CountRows(colPendingApprovals)) & ")"
+
+// btnTabBonus.Text:  "Bonus"
+// btnTabDeduct.Text: "Deduct"
+// btnTabChores.Text: "Chores"
+// btnTabRewards.Text: "Rewards"
+// btnTabSettings.Text: "Settings"
+
+// Tab button active fill (apply to all tab buttons):
+If(gblParentTab = "approvals", gblColors.Primary, gblColors.Background)
+// (repeat with the relevant tab name for each button's Fill)
+
+// Tab OnSelect — example for approvals:
+Set(gblParentTab, "approvals")
+// Repeat for each tab with its own string value.
+
+// ════════════════════════════════════════════════════════════
+// TAB: APPROVALS  (Visible = gblParentTab = "approvals")
+// ════════════════════════════════════════════════════════════
+
+// galApprovals.Items:
+colPendingApprovals
+
+// galApprovals item — lblApprovalChore.Text:
+ThisItem.ChoreName
+
+// galApprovals item — lblApprovalPoints.Text:
+"+" & Text(ThisItem.ChorePoints) & " pts"
+
+// galApprovals item — btnApprove.Text:  "✓ Approve"
+// galApprovals item — btnApprove.Fill:  gblColors.Success
+// galApprovals item — btnApprove.Color: gblColors.Card
+
+// galApprovals item — btnApprove.OnSelect:
+// Approve: update status → "approved", add points
+With({rec: ThisItem},
+    UpdateIf(colDailyStatusLocal,
+        ChildID = rec.ChildID && ChoreID = rec.ChoreID && DateKey = rec.DateKey,
+        {Status: "approved", IsCompleted: true});
+    SaveData(colDailyStatusLocal, "cache_daily_status");
+
+    Collect(colLedgerLocal, {
+        FamilyID:    gblCurrentFamily.ID,
+        ChildID:     rec.ChildID,
+        DateKey:     gblTodayDate,
+        EventType:   "chore_complete",
+        RefID:       rec.ChoreID,
+        PointsDelta: rec.ChorePoints,
+        Note:        "Approved: " & rec.ChoreName
+    });
+    SaveData(colLedgerLocal, "cache_ledger");
+    Set(gblPointsBalance, gblPointsBalance + rec.ChorePoints);
+
+    If(Connection.Connected,
+        Patch(DailyStatus,
+            LookUp(DailyStatus,
+                ChildID = rec.ChildID &&
+                ChoreID = rec.ChoreID &&
+                DateKey = rec.DateKey),
+            {
+                Status:      "approved",
+                IsCompleted: true,
+                VerifiedBy:  Office365Users.MyProfileV2().mail,
+                VerifiedAt:  Now()
+            });
+        Patch(PointsLedger, Defaults(PointsLedger), {
+            Title:       "Approved: " & rec.ChoreName,
+            FamilyID:    gblCurrentFamily.ID,
+            ChildID:     rec.ChildID,
+            DateKey:     gblTodayDate,
+            EventType:   "chore_complete",
+            RefID:       rec.ChoreID,
+            PointsDelta: rec.ChorePoints,
+            Note:        "Approved by parent"
+        })
+    );
+
+    RemoveIf(colPendingApprovals, ChildID = rec.ChildID && ChoreID = rec.ChoreID)
+);
+
+// galApprovals item — btnReject.Text:  "✗ Reject"
+// galApprovals item — btnReject.Fill:  gblColors.Danger
+// galApprovals item — btnReject.Color: gblColors.Card
+
+// galApprovals item — btnReject.OnSelect:
+With({rec: ThisItem},
+    UpdateIf(colDailyStatusLocal,
+        ChildID = rec.ChildID && ChoreID = rec.ChoreID && DateKey = rec.DateKey,
+        {Status: "unchecked", IsCompleted: false});
+    SaveData(colDailyStatusLocal, "cache_daily_status");
+
+    If(Connection.Connected,
+        Patch(DailyStatus,
+            LookUp(DailyStatus,
+                ChildID = rec.ChildID &&
+                ChoreID = rec.ChoreID &&
+                DateKey = rec.DateKey),
+            {Status: "unchecked", IsCompleted: false})
+    );
+
+    RemoveIf(colPendingApprovals, ChildID = rec.ChildID && ChoreID = rec.ChoreID)
+);
+
+// lblNoApprovals.Visible:
+CountRows(colPendingApprovals) = 0
+
+// lblNoApprovals.Text:
+"No pending approvals"
+
+// ════════════════════════════════════════════════════════════
+// TAB: BONUS  (Visible = gblParentTab = "bonus")
+// ════════════════════════════════════════════════════════════
+// Controls: sldBonusPoints (Slider), ddlBonusReason (Dropdown),
+//           lblBonusAmt, btnAwardBonus, lblBonusSuccess
+
+// sldBonusPoints: Min=1, Max=500, Default=25
+// lblBonusAmt.Text:
+"Award " & Text(sldBonusPoints.Value) & " points"
+
+// ddlBonusReason.Items:
+colBonusReasons
+
+// btnAwardBonus.Text:
+"Award Bonus"
+
+// btnAwardBonus.Fill:
+gblColors.Success
+
+// btnAwardBonus.OnSelect:
+Collect(colLedgerLocal, {
+    FamilyID:    gblCurrentFamily.ID,
+    ChildID:     gblCurrentChild.ID,
+    DateKey:     gblTodayDate,
+    EventType:   "bonus",
+    PointsDelta: sldBonusPoints.Value,
+    Note:        "Bonus: " & ddlBonusReason.SelectedText.Value
+});
+SaveData(colLedgerLocal, "cache_ledger");
+Set(gblPointsBalance, gblPointsBalance + sldBonusPoints.Value);
+Set(gblLifetimePoints, gblLifetimePoints + sldBonusPoints.Value);
+
+Collect(colPendingSync, {
+    Operation:   "POINTS_LEDGER",
+    FamilyID:    gblCurrentFamily.ID,
+    ChildID:     gblCurrentChild.ID,
+    DateKey:     gblTodayDate,
+    EventType:   "bonus",
+    PointsDelta: sldBonusPoints.Value,
+    Note:        "Bonus: " & ddlBonusReason.SelectedText.Value,
+    Synced:      false
+});
+SaveData(colPendingSync, "cache_pending_sync");
+
+If(Connection.Connected,
+    Patch(PointsLedger, Defaults(PointsLedger), {
+        Title:       "Bonus: " & ddlBonusReason.SelectedText.Value,
+        FamilyID:    gblCurrentFamily.ID,
+        ChildID:     gblCurrentChild.ID,
+        DateKey:     gblTodayDate,
+        EventType:   "bonus",
+        PointsDelta: sldBonusPoints.Value,
+        Note:        "Bonus: " & ddlBonusReason.SelectedText.Value
+    })
+);
+
+Set(gblBonusSuccess, true);
+UpdateContext({ctxBonusTimer: true});
+// Use a Timer (Duration:3000, AutoStart:ctxBonusTimer) to hide success after 3s
+
+// lblBonusSuccess.Visible:  gblBonusSuccess
+// lblBonusSuccess.Text:     "+" & Text(sldBonusPoints.Value) & " pts awarded!"
+// lblBonusSuccess.Color:    gblColors.Success
+
+// ════════════════════════════════════════════════════════════
+// TAB: DEDUCT  (Visible = gblParentTab = "deduct")
+// ════════════════════════════════════════════════════════════
+// Controls: sldDeductPoints (Slider), ddlDeductReason (Dropdown),
+//           btnDeductPoints, lblDeductConfirmMsg, lblDeductSuccess
+
+// sldDeductPoints: Min=1, Max=500, Default=10
+
+// lblDeductAmt.Text:
+"Deduct " & Text(sldDeductPoints.Value) & " points"
+
+// lblDeductAmt.Color:
+gblColors.Danger
+
+// ddlDeductReason.Items:
+colDeductReasons
+
+// btnDeductPoints.Text:
+"Deduct Points"
+
+// btnDeductPoints.Fill:
+gblColors.Danger
+
+// btnDeductPoints.Color:
+gblColors.Card
+
+// btnDeductPoints.OnSelect:
+Collect(colLedgerLocal, {
+    FamilyID:    gblCurrentFamily.ID,
+    ChildID:     gblCurrentChild.ID,
+    DateKey:     gblTodayDate,
+    EventType:   "deduction",
+    PointsDelta: -sldDeductPoints.Value,
+    Note:        "Deduction: " & ddlDeductReason.SelectedText.Value
+});
+SaveData(colLedgerLocal, "cache_ledger");
+Set(gblPointsBalance, gblPointsBalance - sldDeductPoints.Value);
+
+Collect(colPendingSync, {
+    Operation:   "POINTS_LEDGER",
+    FamilyID:    gblCurrentFamily.ID,
+    ChildID:     gblCurrentChild.ID,
+    DateKey:     gblTodayDate,
+    EventType:   "deduction",
+    PointsDelta: -sldDeductPoints.Value,
+    Note:        "Deduction: " & ddlDeductReason.SelectedText.Value,
+    Synced:      false
+});
+SaveData(colPendingSync, "cache_pending_sync");
+
+If(Connection.Connected,
+    Patch(PointsLedger, Defaults(PointsLedger), {
+        Title:       "Deduction: " & ddlDeductReason.SelectedText.Value,
+        FamilyID:    gblCurrentFamily.ID,
+        ChildID:     gblCurrentChild.ID,
+        DateKey:     gblTodayDate,
+        EventType:   "deduction",
+        PointsDelta: -sldDeductPoints.Value,
+        Note:        "Deduction: " & ddlDeductReason.SelectedText.Value
+    })
+);
+
+Set(gblDeductSuccess, true)
+
+// lblDeductSuccess.Visible:  gblDeductSuccess
+// lblDeductSuccess.Text:     "-" & Text(sldDeductPoints.Value) & " pts deducted"
+// lblDeductSuccess.Color:    gblColors.Danger
+
+// ════════════════════════════════════════════════════════════
+// TAB: SETTINGS  (Visible = gblParentTab = "settings")
+// ════════════════════════════════════════════════════════════
+// Controls: txtPrimaryEmail, txtSecondaryEmail, tglDailySummary,
+//           txtSummaryTime, ddlTimezone, ddlApprovalMode,
+//           sldApprovalThreshold, txtNewPortalPIN, btnSaveSettings
+
+// btnSaveSettings.OnSelect:
+If(Connection.Connected,
+    Patch(FamilySettings,
+        LookUp(FamilySettings, FamilyID = gblCurrentFamily.ID),
+        {
+            PrimaryEmail:          txtPrimaryEmail.Text,
+            SecondaryEmail:        txtSecondaryEmail.Text,
+            DailySummaryEnabled:   tglDailySummary.Value,
+            SummaryTime:           txtSummaryTime.Text,
+            Timezone:              ddlTimezone.SelectedText.Value,
+            ApprovalMode:          ddlApprovalMode.SelectedText.Value,
+            ApprovalThreshold:     sldApprovalThreshold.Value,
+            ParentPortalPIN:       If(Len(txtNewPortalPIN.Text) >= 4,
+                                       txtNewPortalPIN.Text,
+                                       gblFamilySettings.ParentPortalPIN)
+        }
+    );
+    Set(gblFamilySettings,
+        LookUp(FamilySettings, FamilyID = gblCurrentFamily.ID));
+    Set(gblSettingsSaved, true),
+
+    Set(gblSettingsError, "You must be online to save settings.")
+);
+
+// lblSettingsSaved.Visible:  gblSettingsSaved
+// lblSettingsSaved.Text:     "Settings saved!"
+// lblSettingsSaved.Color:    gblColors.Success
+
+// ── btnBack.OnSelect ─────────────────────────────────────────
+// Lock parent panel again when leaving
+Set(gblParentUnlocked, false);
+Navigate(HomeScreen, ScreenTransition.UnCover)
