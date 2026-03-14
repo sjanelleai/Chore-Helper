@@ -41,7 +41,7 @@ export default function Badges() {
               Badges
             </h2>
             <span className="text-sm font-medium text-muted-foreground bg-muted px-3 py-1 rounded-full">
-              {earnedBadges.length} / {badges?.length}
+              {earnedBadges.length} / {badges?.length ?? 0}
             </span>
           </div>
           

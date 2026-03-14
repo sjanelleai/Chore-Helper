@@ -338,7 +338,7 @@ function ChoreConfigSection() {
 
       <div className="space-y-2 mb-4">
         {categories.map(catName => {
-          const items = catalog!.filter(c => c.category === catName);
+          const items = (catalog ?? []).filter(c => c.category === catName);
           const isExpanded = expandedCat === catName;
           const enabledCount = items.filter(i => localEnabled[i.id]).length;
           return (
@@ -953,9 +953,8 @@ function SummarySection() {
 }
 
 function ChildManagementSection() {
-  const { children: kids, family, refreshChildren, activeChild, selectChild, signOut } = useAuth();
+  const { children: kids, family, refreshChildren, activeChild, selectChild, clearChild, signOut } = useAuth();
   const [newChildName, setNewChildName] = useState("");
-  const [newChildPin, setNewChildPin] = useState("");
   const [isAdding, setIsAdding] = useState(false);
   const [addError, setAddError] = useState("");
   const [removingChildId, setRemovingChildId] = useState<string | null>(null);
@@ -970,6 +969,7 @@ function ChildManagementSection() {
       const result = typeof data === "string" ? JSON.parse(data) : data;
       if (result?.error) throw new Error(result.error);
 
+      if (activeChild?.id === childId) clearChild();
       await refreshChildren();
       toast({ title: "Child removed", description: "Child profile and all associated data have been deleted." });
       setConfirmRemoveId(null);
@@ -996,7 +996,6 @@ function ChildManagementSection() {
 
       await refreshChildren();
       setNewChildName("");
-      setNewChildPin("");
     } catch (err: any) {
       setAddError(err.message || "Failed to add child");
     } finally {
@@ -1093,17 +1092,6 @@ function ChildManagementSection() {
           className="w-full p-3 rounded-xl border bg-background text-foreground"
           data-testid="input-new-child-name"
         />
-        <input
-          type="text"
-          value={newChildPin}
-          onChange={(e) => {
-            const v = e.target.value.replace(/\D/g, "").slice(0, 4);
-            setNewChildPin(v);
-          }}
-          placeholder="Optional 4-digit PIN"
-          className="w-full p-3 rounded-xl border bg-background text-foreground"
-          data-testid="input-new-child-pin"
-        />
         {addError && <p className="text-sm text-destructive">{addError}</p>}
         <Button
           onClick={handleAddChild}
@@ -1146,6 +1134,9 @@ function FamilyNumberSection() {
       .single()
       .then(({ data }) => {
         setFamilyNumber(data?.family_number || null);
+        setLoading(false);
+      })
+      .catch(() => {
         setLoading(false);
       });
   }, [family?.familyId]);
@@ -1310,6 +1301,8 @@ function ParentPortalPinSection() {
   const [confirmPinInput, setConfirmPinInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [showDisableForm, setShowDisableForm] = useState(false);
+  const [disablePinInput, setDisablePinInput] = useState("");
 
   useEffect(() => {
     if (!family?.familyId) return;
@@ -1357,16 +1350,23 @@ function ParentPortalPinSection() {
   };
 
   const handleDisablePin = async () => {
+    if (disablePinInput.length < 4) {
+      toast({ title: "Enter your current PIN to confirm", variant: "destructive" });
+      return;
+    }
     setSaving(true);
     try {
       const { data, error } = await supabase.rpc("disable_parent_portal_pin", {
         p_family_id: family!.familyId,
+        p_pin: disablePinInput,
       });
       if (error) throw error;
       const result = typeof data === "string" ? JSON.parse(data) : data;
       if (!result?.ok) throw new Error(result?.error || "Failed to disable PIN");
 
       setHasPin(false);
+      setShowDisableForm(false);
+      setDisablePinInput("");
       sessionStorage.removeItem("parentPortalUnlockedUntil");
       toast({ title: "Parent Portal PIN disabled" });
     } catch (err: any) {
@@ -1408,14 +1408,33 @@ function ParentPortalPinSection() {
             </Button>
             <Button
               variant="outline"
-              onClick={handleDisablePin}
-              disabled={saving}
+              onClick={() => { setShowDisableForm(!showDisableForm); setDisablePinInput(""); }}
               className="text-destructive"
               data-testid="button-disable-portal-pin"
             >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Disable"}
+              Disable
             </Button>
           </div>
+          {showDisableForm && (
+            <div className="border border-destructive/30 rounded-xl p-3 space-y-2 bg-destructive/5">
+              <p className="text-xs font-bold text-destructive">Enter your current PIN to confirm:</p>
+              <input
+                type="password"
+                inputMode="numeric"
+                value={disablePinInput}
+                onChange={e => setDisablePinInput(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                placeholder="Current PIN"
+                className="w-full p-2 rounded-lg border bg-background text-foreground text-sm"
+                data-testid="input-disable-pin-confirm"
+              />
+              <div className="flex gap-2">
+                <Button size="sm" variant="destructive" onClick={handleDisablePin} disabled={saving} data-testid="button-confirm-disable-pin">
+                  {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Confirm Disable"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => { setShowDisableForm(false); setDisablePinInput(""); }}>Cancel</Button>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <Button

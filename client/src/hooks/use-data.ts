@@ -467,7 +467,6 @@ export function useRedeemReward() {
 
       const reward = catalog?.find(r => r.id === rewardId);
       return {
-        ok: data.ok as boolean,
         redemption_id: data.redemption_id as string,
         rewardTitle: reward?.title || "Reward",
         rewardCost: reward?.cost || 0,

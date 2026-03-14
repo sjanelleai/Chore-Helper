@@ -127,7 +127,8 @@ function ParentGuard({ children }: { children: React.ReactNode }) {
       .eq("family_id", family.familyId)
       .single()
       .then(({ data, error }) => {
-        if (error) {
+        // PGRST116 = "not found" — new family has no settings row yet, no PIN
+        if (error && error.code !== "PGRST116") {
           setNeedsPin(true);
           setChecking(false);
           return;
