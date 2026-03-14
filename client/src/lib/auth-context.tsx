@@ -70,16 +70,22 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
   const seedCatalogForFamily = useCallback(async (familyId: string) => {
     try {
       setCatalogSeedError(null);
-      const result = await ensureCatalogSeeded({ supabase, queryClient, familyId });
-      if (result.seeded) {
-        console.log("[auth] Default catalog seeded for family:", familyId);
-      }
-    } catch (err: any) {
-      const msg = [err?.message, err?.details, err?.hint].filter(Boolean).join(" | ");
+      await ensureCatalogSeeded({ supabase, queryClient, familyId });
+    } catch (err: unknown) {
+      const e = err as { message?: string; details?: string; hint?: string };
+      const msg = [e?.message, e?.details, e?.hint].filter(Boolean).join(" | ");
       console.error("[auth] Catalog seeding failed:", msg, err);
       setCatalogSeedError(msg || "Failed to set up default chores and rewards.");
     }
   }, []);
+
+  interface ChildRow {
+    id: string;
+    display_name: string | null;
+    avatar: string | null;
+    child_pin_hash: string | null;
+    pin_hash: string | null;
+  }
 
   const loadChildren = useCallback(async (familyId: string) => {
     const { data: kids, error } = await supabase
@@ -96,7 +102,7 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
 
     if (kids) {
       setChildrenList(
-        kids.map((k: any) => ({
+        (kids as ChildRow[]).map((k) => ({
           id: k.id,
           displayName: k.display_name || "Child",
           avatar: k.avatar ?? null,
@@ -117,7 +123,6 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
       .single();
 
     if (mErr || !membership) {
-      console.log("[auth] No family_members row found. Calling ensure_family_exists RPC...");
       const created = await createFamilyFallback();
       if (created) {
         setFamily({
@@ -166,7 +171,14 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
         return null;
       }
 
-      const result = typeof data === "string" ? JSON.parse(data) : data;
+      let result: { error?: string; family_id?: string; display_name?: string } | null = null;
+      try {
+        result = typeof data === "string" ? JSON.parse(data) : data;
+      } catch {
+        console.error("[auth] Failed to parse ensure_family_exists response");
+        setAuthError("Family setup returned unexpected data. Please try signing out and back in.");
+        return null;
+      }
 
       if (result?.error) {
         const errMsg = `Family setup failed: ${result.error}`;
@@ -176,7 +188,6 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
       }
 
       if (result?.family_id) {
-        console.log("[auth] Family created successfully:", result);
         setAuthError(null);
         return { familyId: result.family_id, displayName: result.display_name || displayName };
       }
@@ -185,8 +196,8 @@ export function AuthProvider({ children: childrenNodes }: { children: React.Reac
       console.error("[auth] ensure_family_exists returned unexpected data:", result);
       setAuthError(errMsg);
       return null;
-    } catch (err: any) {
-      const errMsg = `Family setup error: ${err?.message || "Unknown error"}`;
+    } catch (err: unknown) {
+      const errMsg = `Family setup error: ${err instanceof Error ? err.message : "Unknown error"}`;
       console.error("[auth] createFamilyFallback exception:", err);
       setAuthError(errMsg);
       return null;

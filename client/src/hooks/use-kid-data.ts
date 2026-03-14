@@ -5,6 +5,17 @@ import { supabase } from "@/lib/supabase";
 import type { EnabledChore, EnabledReward } from "@shared/schema";
 import type { ChoreCatalogItem, RewardCatalogItem } from "./use-data";
 
+function parseRpcResponse<T = { ok?: boolean; error?: string }>(data: unknown): T {
+  if (typeof data === "string") {
+    try {
+      return JSON.parse(data) as T;
+    } catch {
+      throw new Error("Failed to parse server response");
+    }
+  }
+  return data as T;
+}
+
 function localDateKey(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -34,7 +45,7 @@ export function useKidChoreCatalog() {
         p_type: "chore",
       });
       if (error) throw error;
-      const result = typeof data === "string" ? JSON.parse(data) : data;
+      const result = parseRpcResponse<{ ok?: boolean; error?: string; items?: unknown[] }>(data);
       if (!result?.ok) throw new Error(result?.error || "Failed to load chores");
       return (result.items || []) as ChoreCatalogItem[];
     },
@@ -53,7 +64,7 @@ export function useKidRewardCatalog() {
         p_type: "reward",
       });
       if (error) throw error;
-      const result = typeof data === "string" ? JSON.parse(data) : data;
+      const result = parseRpcResponse<{ ok?: boolean; error?: string; items?: unknown[] }>(data);
       if (!result?.ok) throw new Error(result?.error || "Failed to load rewards");
       return (result.items || []) as RewardCatalogItem[];
     },
@@ -72,7 +83,7 @@ export function useKidChildPoints() {
         p_child_id: childId!,
       });
       if (error) throw error;
-      const result = typeof data === "string" ? JSON.parse(data) : data;
+      const result = parseRpcResponse<{ ok?: boolean; error?: string; points?: number; lifetime_points?: number }>(data);
       if (!result?.ok) throw new Error(result?.error || "Failed to load points");
       return {
         child_id: childId!,
@@ -106,11 +117,11 @@ export function useKidChores() {
       });
 
       if (error) throw error;
-      const result = typeof data === "string" ? JSON.parse(data) : data;
+      const result = parseRpcResponse<{ statuses?: Array<{ chore_id: string; status: string }> }>(data);
       const statuses = result?.statuses || [];
       const statusMap = new Map<string, string>();
       for (const s of statuses) {
-        statusMap.set(s.chore_id, s.status || "approved");
+        statusMap.set(s.chore_id, s.status ?? "approved");
       }
 
       return activeChores.map(c => {
@@ -150,7 +161,7 @@ export function useKidToggleChore() {
       });
 
       if (error) throw error;
-      const result = typeof data === "string" ? JSON.parse(data) : data;
+      const result = parseRpcResponse<{ ok?: boolean; error?: string; status?: string }>(data);
       if (!result?.ok) throw new Error(result?.error || "Failed to toggle chore");
 
       const chore = catalog?.find(c => c.id === choreId);
@@ -236,7 +247,7 @@ export function useKidRedeemReward() {
       });
 
       if (error) throw error;
-      const result = typeof data === "string" ? JSON.parse(data) : data;
+      const result = parseRpcResponse<{ ok?: boolean; error?: string; redemption_id?: string }>(data);
       if (!result?.ok) throw new Error(result?.error || "Failed to redeem reward");
 
       const reward = catalog?.find(r => r.id === rewardId);
@@ -276,7 +287,7 @@ export function useKidBadges() {
       });
 
       if (error) throw error;
-      const result = typeof data === "string" ? JSON.parse(data) : data;
+      const result = parseRpcResponse<{ ok?: boolean; error?: string; badges?: unknown[] }>(data);
       if (!result?.ok) throw new Error(result?.error || "Failed to load badges");
       return result.badges || [];
     },
@@ -297,9 +308,13 @@ export function useKidRedemptions() {
       });
 
       if (error) throw error;
-      const result = typeof data === "string" ? JSON.parse(data) : data;
+      const result = parseRpcResponse<{
+        ok?: boolean;
+        error?: string;
+        redemptions?: Array<{ id: string; reward_id: string; reward_title?: string; cost: number; status: string; created_at: string }>;
+      }>(data);
       if (!result?.ok) throw new Error(result?.error || "Failed to load redemptions");
-      return (result.redemptions || []).map((r: any) => ({
+      return (result.redemptions || []).map((r) => ({
         id: r.id,
         reward_id: r.reward_id,
         reward_title: r.reward_title || "Unknown",

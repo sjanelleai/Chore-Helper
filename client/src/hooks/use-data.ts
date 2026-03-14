@@ -78,7 +78,18 @@ export function useFamilySettings() {
             updated_at: new Date().toISOString(),
           };
         }
-        return inserted as any;
+        return inserted as {
+          family_id: string;
+          primary_parent_email: string | null;
+          secondary_parent_email: string | null;
+          daily_summary_enabled: boolean;
+          daily_summary_time_local: string | null;
+          timezone: string | null;
+          approval_mode: string;
+          approval_threshold: number;
+          created_at: string;
+          updated_at: string;
+        };
       }
 
       return data as {
@@ -187,7 +198,7 @@ export function useChores() {
       const safeRows = dailyRows ?? [];
       const statusMap = new Map<string, string>();
       for (const row of safeRows) {
-        statusMap.set(row.chore_id, row.status || "approved");
+        statusMap.set(row.chore_id, row.status ?? "approved");
       }
 
       return activeChores.map(c => {
@@ -229,7 +240,7 @@ export function useToggleChore() {
       const chore = catalog?.find(c => c.id === choreId);
       return {
         ok: data.ok as boolean,
-        status: (data.status || "approved") as string,
+        status: (data.status ?? "approved") as string,
         choreTitle: chore?.title || "Chore",
         chorePoints: chore?.points || 0,
       };

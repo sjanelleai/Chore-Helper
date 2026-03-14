@@ -47,7 +47,14 @@ export default function KidJoin() {
 
       if (rpcErr) throw rpcErr;
 
-      const result = typeof data === "string" ? JSON.parse(data) : data;
+      let result: { ok?: boolean; error?: string; kid_token?: string; family_id?: string; children?: ChildOption[] } | null = null;
+      try {
+        result = typeof data === "string" ? JSON.parse(data) : data;
+      } catch {
+        setError("Something went wrong. Please try again.");
+        setLoading(false);
+        return;
+      }
 
       if (!result?.ok) {
         if (result?.error === "family_not_found") {
@@ -94,8 +101,9 @@ export default function KidJoin() {
         setKidSession(kidSessionData);
         setChildrenList(kids);
       }
-    } catch (err: any) {
-      const msg = [err?.message, err?.details, err?.hint].filter(Boolean).join(" | ");
+    } catch (err: unknown) {
+      const e = err as { message?: string; details?: string; hint?: string };
+      const msg = [e?.message, e?.details, e?.hint].filter(Boolean).join(" | ");
       setError(msg || "Something went wrong. Please try again.");
     } finally {
       setLoading(false);
@@ -124,8 +132,8 @@ export default function KidJoin() {
         expiresAt: Date.now() + 24 * 60 * 60 * 1000,
       });
       navigate("/");
-    } catch (err: any) {
-      setError(err?.message || "Failed to select child");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to select child");
     } finally {
       setLoading(false);
     }

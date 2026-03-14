@@ -31,7 +31,14 @@ export default function ParentUnlock() {
 
       if (rpcErr) throw rpcErr;
 
-      const result = typeof data === "string" ? JSON.parse(data) : data;
+      let result: { ok?: boolean; error?: string } | null = null;
+      try {
+        result = typeof data === "string" ? JSON.parse(data) : data;
+      } catch {
+        setError("Something went wrong. Please try again.");
+        setLoading(false);
+        return;
+      }
 
       if (result?.ok) {
         const { data: settingsData } = await supabase
@@ -50,8 +57,8 @@ export default function ParentUnlock() {
         setError(result?.error || "Wrong PIN");
         setPin("");
       }
-    } catch (err: any) {
-      setError(err?.message || "Something went wrong");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setLoading(false);
     }
