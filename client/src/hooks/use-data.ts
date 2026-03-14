@@ -352,14 +352,37 @@ export function useApproveChore() {
 
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
-      return data;
+
+      const { data: ptsData } = await supabase
+        .from("points_ledger")
+        .select("points_delta")
+        .eq("child_id", childId);
+
+      let lifetimeTotal = 0;
+      for (const row of (ptsData || [])) {
+        if (row.points_delta > 0) lifetimeTotal += row.points_delta;
+      }
+
+      const newBadges = await checkAndAwardBadges(childId, lifetimeTotal);
+      return { newBadges };
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["pending_approvals"] });
       queryClient.invalidateQueries({ queryKey: ["chores"] });
       queryClient.invalidateQueries({ queryKey: ["child_points"] });
       queryClient.invalidateQueries({ queryKey: ["family_summary"] });
       queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      queryClient.invalidateQueries({ queryKey: ["badges"] });
+
+      if (data.newBadges?.length > 0) {
+        data.newBadges.forEach((badge) => {
+          toast({
+            title: "Badge Unlocked!",
+            description: `${badge.name} badge earned!`,
+            className: "bg-accent text-accent-foreground border-none",
+          });
+        });
+      }
       toast({
         title: "Approved!",
         description: "Points have been awarded.",

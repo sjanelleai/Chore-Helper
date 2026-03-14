@@ -168,7 +168,7 @@ export function useKidToggleChore() {
         chorePoints: chore?.points || 0,
       };
     },
-    onSuccess: (data, choreId) => {
+    onSuccess: async (data, choreId) => {
       const today = localDateKey(new Date());
       const choresKey = ["kid_chores", kidSession?.familyId, childId, today];
 
@@ -191,6 +191,24 @@ export function useKidToggleChore() {
           description: `+${data.chorePoints} points earned!`,
           className: "bg-green-500 text-white border-none",
         });
+
+        if (kidToken && childId) {
+          const { data: badgeData } = await supabase.rpc("kid_check_badges", {
+            p_kid_token: kidToken,
+            p_child_id: childId,
+          });
+          const result = typeof badgeData === "string" ? JSON.parse(badgeData) : badgeData;
+          if (result?.new_badges?.length > 0) {
+            queryClient.invalidateQueries({ queryKey: ["kid_badges", childId] });
+            result.new_badges.forEach((badge: { name: string }) => {
+              toast({
+                title: "Badge Unlocked!",
+                description: `${badge.name} badge earned!`,
+                className: "bg-accent text-accent-foreground border-none",
+              });
+            });
+          }
+        }
       } else if (data.status === "pending") {
         toast({
           title: "Submitted!",
