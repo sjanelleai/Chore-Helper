@@ -15,7 +15,8 @@ alter table points_ledger
     'bonus',
     'purchase',
     'manual_adjust',
-    'deduction'
+    'deduction',
+    'redeem'
   ));
 
 -- 2) RPC: deduct_points(p_child_id, p_points, p_reason)
