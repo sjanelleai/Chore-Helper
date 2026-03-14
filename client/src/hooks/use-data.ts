@@ -582,6 +582,35 @@ export function useUpdateChoreConfig() {
   });
 }
 
+export function useCreateChore() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { family } = useAuth();
+
+  return useMutation({
+    mutationFn: async (data: { title: string; category: string; points: number }) => {
+      const { error } = await supabase
+        .from("chore_catalog")
+        .insert({
+          family_id: family!.familyId,
+          title: data.title,
+          category: data.category,
+          points: data.points,
+          active: true,
+        });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["chore_catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["chores"] });
+      toast({ title: "Chore added!" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useUpdateRewardConfig() {
   const queryClient = useQueryClient();
   const { toast } = useToast();

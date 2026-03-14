@@ -6,6 +6,7 @@ import {
   useChoreCatalog, useRewardCatalog,
   useFamilySettings,
   usePendingApprovals, useApproveChore, useRejectChore,
+  useCreateChore,
   useCreateReward, useUpdateReward, useArchiveReward,
 } from "@/hooks/use-data";
 import type { PendingApproval, RewardCatalogItem } from "@/hooks/use-data";
@@ -213,10 +214,13 @@ function DeductionSection() {
 function ChoreConfigSection() {
   const { data: catalog } = useChoreCatalog();
   const updateChores = useUpdateChoreConfig();
+  const createChore = useCreateChore();
   const [localEnabled, setLocalEnabled] = useState<Record<string, boolean>>({});
   const [localPoints, setLocalPoints] = useState<Record<string, number>>({});
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
   const [initialized, setInitialized] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [addForm, setAddForm] = useState({ title: "", category: "", newCategory: "", points: 10 });
 
   useEffect(() => {
     if (catalog && catalog.length > 0 && !initialized) {
@@ -244,17 +248,93 @@ function ChoreConfigSection() {
     setLocalPoints(prev => ({ ...prev, [id]: Math.max(0, Math.min(999999, pts)) }));
   };
 
+  const handleAdd = () => {
+    const category = addForm.newCategory.trim() || addForm.category;
+    if (!addForm.title.trim() || !category || addForm.points < 1) return;
+    createChore.mutate(
+      { title: addForm.title.trim(), category, points: addForm.points },
+      { onSuccess: () => { setShowAdd(false); setAddForm({ title: "", category: "", newCategory: "", points: 10 }); } }
+    );
+  };
+
   const categories = catalog
     ? Array.from(new Set(catalog.map(c => c.category)))
     : [];
 
   return (
     <Card className="p-5">
-      <h3 className="font-display font-bold text-lg mb-2 flex items-center gap-2">
-        <CheckSquare className="w-5 h-5 text-primary" />
-        Chore Catalog
-      </h3>
-      <p className="text-sm text-muted-foreground mb-4">Toggle chores on/off and set custom point values.</p>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-display font-bold text-lg flex items-center gap-2">
+          <CheckSquare className="w-5 h-5 text-primary" />
+          Chore Catalog
+        </h3>
+        <Button
+          size="sm"
+          onClick={() => setShowAdd(!showAdd)}
+          className="gap-1"
+          data-testid="button-add-chore"
+        >
+          <Plus className="w-4 h-4" />
+          Add
+        </Button>
+      </div>
+      <p className="text-sm text-muted-foreground mb-4">Toggle chores on/off, set point values, or add custom chores.</p>
+
+      {showAdd && (
+        <div className="border-2 border-dashed border-primary/40 rounded-xl p-4 mb-4 space-y-3 bg-primary/5" data-testid="form-add-chore">
+          <p className="font-bold text-sm text-foreground">New Chore</p>
+          <input
+            type="text"
+            placeholder="Chore title"
+            value={addForm.title}
+            onChange={e => setAddForm(p => ({ ...p, title: e.target.value }))}
+            className="w-full p-2.5 rounded-lg border bg-background text-foreground text-sm"
+            data-testid="input-add-chore-title"
+          />
+          <div className="flex gap-2">
+            <select
+              value={addForm.category}
+              onChange={e => setAddForm(p => ({ ...p, category: e.target.value, newCategory: "" }))}
+              className="flex-1 p-2.5 rounded-lg border bg-background text-foreground text-sm"
+              data-testid="select-add-chore-category"
+            >
+              <option value="">Select category...</option>
+              {categories.map(c => <option key={c} value={c}>{c}</option>)}
+              <option value="__new__">+ New category</option>
+            </select>
+            {addForm.category === "__new__" && (
+              <input
+                type="text"
+                placeholder="Category name"
+                value={addForm.newCategory}
+                onChange={e => setAddForm(p => ({ ...p, newCategory: e.target.value }))}
+                className="flex-1 p-2.5 rounded-lg border bg-background text-foreground text-sm"
+                data-testid="input-add-chore-new-category"
+              />
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-bold text-muted-foreground">Points:</label>
+            <input
+              type="number"
+              min="1"
+              max="999999"
+              value={addForm.points}
+              onChange={e => setAddForm(p => ({ ...p, points: parseInt(e.target.value) || 0 }))}
+              className="w-24 p-2.5 rounded-lg border bg-background text-foreground font-mono text-sm text-center"
+              data-testid="input-add-chore-points"
+            />
+            <span className="text-sm text-muted-foreground">pts</span>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={handleAdd} disabled={createChore.isPending} size="sm" className="gap-1" data-testid="button-confirm-add-chore">
+              {createChore.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+              Save
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowAdd(false)} data-testid="button-cancel-add-chore">Cancel</Button>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-2 mb-4">
         {categories.map(catName => {
