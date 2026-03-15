@@ -154,9 +154,35 @@ grant execute on function public.kid_get_catalog(text) to anon, authenticated;
 
 
 -- 4) HIGH-6: Unique constraint on child_badges prevents duplicate badge rows
---    from the race condition in checkAndAwardBadges
+--    from the race condition in checkAndAwardBadges.
+--    Create the table if it doesn't exist yet (idempotent).
+create table if not exists public.child_badges (
+  id         uuid primary key default gen_random_uuid(),
+  child_id   uuid not null references public.children(id) on delete cascade,
+  badge_key  text not null,
+  badge_name text not null,
+  badge_icon text not null,
+  threshold  int  not null,
+  earned_at  timestamptz not null default now()
+);
+
 alter table public.child_badges
   drop constraint if exists uq_child_badges_child_key;
+
+-- Also drop the unnamed unique constraint if it came from the base migration
+do $$
+declare
+  v_conname text;
+begin
+  select conname into v_conname
+  from pg_constraint
+  where conrelid = 'public.child_badges'::regclass
+    and contype = 'u'
+    and conname != 'uq_child_badges_child_key';
+  if v_conname is not null then
+    execute 'alter table public.child_badges drop constraint ' || quote_ident(v_conname);
+  end if;
+end $$;
 
 alter table public.child_badges
   add constraint uq_child_badges_child_key unique (child_id, badge_key);
