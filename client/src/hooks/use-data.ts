@@ -289,6 +289,14 @@ export function useResetChores() {
       if (!activeChildId) throw new Error("No child selected");
       const today = localDateKey(new Date());
 
+      // Fetch completed chores so we can reverse their ledger entries
+      const { data: completed } = await supabase
+        .from("daily_status_v2")
+        .select("chore_id")
+        .eq("child_id", activeChildId)
+        .eq("date_key", today)
+        .eq("completed", true);
+
       const { error } = await supabase
         .from("daily_status_v2")
         .delete()
@@ -296,6 +304,18 @@ export function useResetChores() {
         .eq("date_key", today);
 
       if (error) throw error;
+
+      // Remove the points awarded for those chores today so the balance stays accurate
+      if (completed && completed.length > 0) {
+        const choreIds = completed.map((r: any) => r.chore_id);
+        await supabase
+          .from("points_ledger")
+          .delete()
+          .eq("child_id", activeChildId)
+          .eq("date_key", today)
+          .eq("event_type", "chore_complete")
+          .in("ref_id", choreIds);
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["chores"] });
@@ -790,13 +810,10 @@ async function checkAndAwardBadges(childId: string, lifetimePoints: number) {
   const newBadges = BADGE_DEFS.filter(b => !earnedKeys.has(b.key) && lifetimePoints >= b.threshold);
 
   for (const badge of newBadges) {
-    await supabase.from("child_badges").insert({
-      child_id: childId,
-      badge_key: badge.key,
-      badge_name: badge.name,
-      badge_icon: badge.icon,
-      threshold: badge.threshold,
-    });
+    await supabase.from("child_badges").upsert(
+      { child_id: childId, badge_key: badge.key, badge_name: badge.name, badge_icon: badge.icon, threshold: badge.threshold },
+      { onConflict: "child_id,badge_key", ignoreDuplicates: true }
+    );
   }
 
   return newBadges;
