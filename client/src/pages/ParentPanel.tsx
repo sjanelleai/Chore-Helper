@@ -797,18 +797,20 @@ function SettingsSection() {
         </div>
 
         {summaryEnabled && (
-          <div className="space-y-3 pl-2 border-l-2 border-primary/20 ml-2">
+          <div className="space-y-3 pl-2 border-l-2 border-primary/20 ml-2 overflow-hidden">
             <div>
               <label className="text-sm font-bold text-muted-foreground mb-1 flex items-center gap-1">
                 <Clock className="w-4 h-4" /> Send Time
               </label>
-              <input
-                type="time"
-                value={summaryTime}
-                onChange={(e) => setSummaryTime(e.target.value)}
-                className="w-full p-3 rounded-xl border bg-background text-foreground"
-                data-testid="input-summary-time"
-              />
+              <div className="overflow-hidden">
+                <input
+                  type="time"
+                  value={summaryTime}
+                  onChange={(e) => setSummaryTime(e.target.value)}
+                  className="w-full p-3 rounded-xl border bg-background text-foreground box-border"
+                  data-testid="input-summary-time"
+                />
+              </div>
             </div>
             <div>
               <label className="text-sm font-bold text-muted-foreground mb-1 flex items-center gap-1">
