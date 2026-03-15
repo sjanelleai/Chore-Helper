@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Loader2, UserPlus, LogOut, User, Lock, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import bcrypt from "bcryptjs";
 
 export default function SelectChild() {
   const { children, family, signOut, selectChild, refreshChildren, refreshFamily } = useAuth();
@@ -21,7 +20,6 @@ export default function SelectChild() {
 
   const [showAddChild, setShowAddChild] = useState(false);
   const [newChildName, setNewChildName] = useState("");
-  const [newChildPin, setNewChildPin] = useState("");
   const [addingChild, setAddingChild] = useState(false);
 
   const handleChildClick = (childId: string, hasPin: boolean) => {
@@ -42,29 +40,15 @@ export default function SelectChild() {
     setVerifying(true);
 
     try {
-      const { data: childData, error } = await supabase
-        .from("children")
-        .select("*")
-        .eq("id", pinFor)
-        .single();
+      const { data, error } = await supabase.rpc("verify_child_pin", {
+        p_child_id: pinFor,
+        p_pin: pinInput,
+      });
 
-      if (error || !childData) {
-        setPinError("Something went wrong. Try again.");
-        setVerifying(false);
-        return;
-      }
+      if (error) throw error;
+      const result = typeof data === "string" ? JSON.parse(data) : data;
 
-      const pinHash = (childData as any).pin_hash;
-      if (!pinHash) {
-        selectChild(pinFor);
-        navigate("/");
-        return;
-      }
-
-      const match = await bcrypt.compare(pinInput, pinHash);
-      setVerifying(false);
-
-      if (match) {
+      if (result?.ok) {
         selectChild(pinFor);
         navigate("/");
       } else {
@@ -73,6 +57,7 @@ export default function SelectChild() {
       }
     } catch {
       setPinError("Something went wrong. Try again.");
+    } finally {
       setVerifying(false);
     }
   };
@@ -101,7 +86,6 @@ export default function SelectChild() {
 
       toast({ title: "Child added!", description: `${newChildName} has been created.` });
       setNewChildName("");
-      setNewChildPin("");
       setShowAddChild(false);
       await refreshChildren();
     } catch (err: any) {
@@ -231,22 +215,6 @@ export default function SelectChild() {
                   placeholder="Enter name"
                   className="w-full p-3 rounded-xl border bg-background text-foreground"
                   data-testid="input-child-name"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-bold text-muted-foreground mb-1 block">4-Digit PIN (optional)</label>
-                <input
-                  type="text"
-                  value={newChildPin}
-                  onChange={(e) => {
-                    const v = e.target.value.replace(/\D/g, "").slice(0, 4);
-                    setNewChildPin(v);
-                  }}
-                  inputMode="numeric"
-                  maxLength={4}
-                  placeholder="Leave blank for no PIN"
-                  className="w-full p-3 rounded-xl border bg-background text-foreground font-mono tracking-widest"
-                  data-testid="input-new-child-pin"
                 />
               </div>
               <div className="flex gap-3">

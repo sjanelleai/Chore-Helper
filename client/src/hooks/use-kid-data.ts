@@ -16,6 +16,15 @@ function parseRpcResponse<T = { ok?: boolean; error?: string }>(data: unknown): 
   return data as T;
 }
 
+const BADGE_DEFS = [
+  { key: "starter",  name: "Starter Badge",  threshold: 50,   icon: "medal_bronze" },
+  { key: "helper2",  name: "Helper Level 2", threshold: 150,  icon: "medal_silver" },
+  { key: "master",   name: "Chore Master",   threshold: 300,  icon: "medal_gold" },
+  { key: "star",     name: "Super Star",     threshold: 500,  icon: "star" },
+  { key: "champion", name: "Champion",       threshold: 1000, icon: "trophy" },
+  { key: "legend",   name: "Legend",         threshold: 2000, icon: "crown" },
+];
+
 function localDateKey(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -42,12 +51,10 @@ export function useKidChoreCatalog() {
     queryFn: async () => {
       const { data, error } = await supabase.rpc("kid_get_catalog", {
         p_kid_token: kidToken!,
-        p_type: "chore",
       });
       if (error) throw error;
-      const result = parseRpcResponse<{ ok?: boolean; error?: string; items?: unknown[] }>(data);
-      if (!result?.ok) throw new Error(result?.error || "Failed to load chores");
-      return (result.items || []) as ChoreCatalogItem[];
+      const result = parseRpcResponse<{ chores?: unknown[] }>(data);
+      return (result?.chores || []) as ChoreCatalogItem[];
     },
   });
 }
@@ -61,12 +68,10 @@ export function useKidRewardCatalog() {
     queryFn: async () => {
       const { data, error } = await supabase.rpc("kid_get_catalog", {
         p_kid_token: kidToken!,
-        p_type: "reward",
       });
       if (error) throw error;
-      const result = parseRpcResponse<{ ok?: boolean; error?: string; items?: unknown[] }>(data);
-      if (!result?.ok) throw new Error(result?.error || "Failed to load rewards");
-      return (result.items || []) as RewardCatalogItem[];
+      const result = parseRpcResponse<{ rewards?: unknown[] }>(data);
+      return (result?.rewards || []) as RewardCatalogItem[];
     },
   });
 }
@@ -172,7 +177,7 @@ export function useKidToggleChore() {
         chorePoints: chore?.points || 0,
       };
     },
-    onSuccess: (data, choreId) => {
+    onSuccess: async (data, choreId) => {
       const today = localDateKey(new Date());
       const choresKey = ["kid_chores", kidSession?.familyId, childId, today];
 
@@ -195,6 +200,24 @@ export function useKidToggleChore() {
           description: `+${data.chorePoints} points earned!`,
           className: "bg-green-500 text-white border-none",
         });
+
+        if (kidToken && childId) {
+          const { data: badgeData } = await supabase.rpc("kid_check_badges", {
+            p_kid_token: kidToken,
+            p_child_id: childId,
+          });
+          const result = typeof badgeData === "string" ? JSON.parse(badgeData) : badgeData;
+          if (result?.new_badges?.length > 0) {
+            queryClient.invalidateQueries({ queryKey: ["kid_badges", childId] });
+            result.new_badges.forEach((badge: { name: string }) => {
+              toast({
+                title: "Badge Unlocked!",
+                description: `${badge.name} badge earned!`,
+                className: "bg-accent text-accent-foreground border-none",
+              });
+            });
+          }
+        }
       } else if (data.status === "pending") {
         toast({
           title: "Submitted!",
@@ -259,8 +282,8 @@ export function useKidRedeemReward() {
       };
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["kid_child_points"] });
-      queryClient.invalidateQueries({ queryKey: ["kid_redemptions"] });
+      queryClient.invalidateQueries({ queryKey: ["kid_child_points", childId] });
+      queryClient.invalidateQueries({ queryKey: ["kid_redemptions", childId] });
       toast({
         title: "Reward Redeemed!",
         description: `You got ${data.rewardTitle}!`,
@@ -276,9 +299,10 @@ export function useKidRedeemReward() {
 export function useKidBadges() {
   const kidToken = useKidToken();
   const childId = useKidChildId();
+  const { data: pts } = useKidChildPoints();
 
   return useQuery({
-    queryKey: ["kid_badges", childId],
+    queryKey: ["kid_badges", childId, pts?.lifetime_points],
     enabled: !!kidToken && !!childId,
     queryFn: async () => {
       const { data, error } = await supabase.rpc("kid_get_badges", {
@@ -289,7 +313,17 @@ export function useKidBadges() {
       if (error) throw error;
       const result = parseRpcResponse<{ ok?: boolean; error?: string; badges?: unknown[] }>(data);
       if (!result?.ok) throw new Error(result?.error || "Failed to load badges");
-      return result.badges || [];
+
+      const earnedKeys = new Set((result.badges || []).map((b: any) => b.badge_key));
+      const lifetime = pts?.lifetime_points || 0;
+
+      return BADGE_DEFS.map(b => ({
+        id: b.key,
+        name: b.name,
+        icon: b.icon,
+        threshold: b.threshold,
+        earned: earnedKeys.has(b.key) || lifetime >= b.threshold,
+      }));
     },
   });
 }
@@ -320,7 +354,7 @@ export function useKidRedemptions() {
         reward_title: r.reward_title || "Unknown",
         cost: r.cost,
         status: r.status,
-        purchased_at: r.created_at,
+        purchased_at: r.purchased_at,
       }));
     },
   });

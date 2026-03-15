@@ -289,6 +289,14 @@ export function useResetChores() {
       if (!activeChildId) throw new Error("No child selected");
       const today = localDateKey(new Date());
 
+      // Fetch completed chores so we can reverse their ledger entries
+      const { data: completed } = await supabase
+        .from("daily_status_v2")
+        .select("chore_id")
+        .eq("child_id", activeChildId)
+        .eq("date_key", today)
+        .eq("completed", true);
+
       const { error } = await supabase
         .from("daily_status_v2")
         .delete()
@@ -296,6 +304,18 @@ export function useResetChores() {
         .eq("date_key", today);
 
       if (error) throw error;
+
+      // Remove the points awarded for those chores today so the balance stays accurate
+      if (completed && completed.length > 0) {
+        const choreIds = completed.map((r: any) => r.chore_id);
+        await supabase
+          .from("points_ledger")
+          .delete()
+          .eq("child_id", activeChildId)
+          .eq("date_key", today)
+          .eq("event_type", "chore_complete")
+          .in("ref_id", choreIds);
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["chores"] });
@@ -352,14 +372,37 @@ export function useApproveChore() {
 
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
-      return data;
+
+      const { data: ptsData } = await supabase
+        .from("points_ledger")
+        .select("points_delta")
+        .eq("child_id", childId);
+
+      let lifetimeTotal = 0;
+      for (const row of (ptsData || [])) {
+        if (row.points_delta > 0) lifetimeTotal += row.points_delta;
+      }
+
+      const newBadges = await checkAndAwardBadges(childId, lifetimeTotal);
+      return { newBadges };
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["pending_approvals"] });
       queryClient.invalidateQueries({ queryKey: ["chores"] });
       queryClient.invalidateQueries({ queryKey: ["child_points"] });
       queryClient.invalidateQueries({ queryKey: ["family_summary"] });
       queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      queryClient.invalidateQueries({ queryKey: ["badges"] });
+
+      if (data.newBadges?.length > 0) {
+        data.newBadges.forEach((badge) => {
+          toast({
+            title: "Badge Unlocked!",
+            description: `${badge.name} badge earned!`,
+            className: "bg-accent text-accent-foreground border-none",
+          });
+        });
+      }
       toast({
         title: "Approved!",
         description: "Points have been awarded.",
@@ -444,7 +487,6 @@ export function useRedeemReward() {
 
       const reward = catalog?.find(r => r.id === rewardId);
       return {
-        ok: data.ok as boolean,
         redemption_id: data.redemption_id as string,
         rewardTitle: reward?.title || "Reward",
         rewardCost: reward?.cost || 0,
@@ -552,6 +594,35 @@ export function useUpdateChoreConfig() {
       queryClient.invalidateQueries({ queryKey: ["chore_catalog"] });
       queryClient.invalidateQueries({ queryKey: ["chores"] });
       toast({ title: "Chore settings saved!" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
+export function useCreateChore() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { family } = useAuth();
+
+  return useMutation({
+    mutationFn: async (data: { title: string; category: string; points: number }) => {
+      const { error } = await supabase
+        .from("chore_catalog")
+        .insert({
+          family_id: family!.familyId,
+          title: data.title,
+          category: data.category,
+          points: data.points,
+          active: true,
+        });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["chore_catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["chores"] });
+      toast({ title: "Chore added!" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -739,13 +810,10 @@ async function checkAndAwardBadges(childId: string, lifetimePoints: number) {
   const newBadges = BADGE_DEFS.filter(b => !earnedKeys.has(b.key) && lifetimePoints >= b.threshold);
 
   for (const badge of newBadges) {
-    await supabase.from("child_badges").insert({
-      child_id: childId,
-      badge_key: badge.key,
-      badge_name: badge.name,
-      badge_icon: badge.icon,
-      threshold: badge.threshold,
-    });
+    await supabase.from("child_badges").upsert(
+      { child_id: childId, badge_key: badge.key, badge_name: badge.name, badge_icon: badge.icon, threshold: badge.threshold },
+      { onConflict: "child_id,badge_key", ignoreDuplicates: true }
+    );
   }
 
   return newBadges;
